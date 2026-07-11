@@ -798,6 +798,7 @@ function SettingsView({data}){
   const {members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,toast,refreshTxAndFixed,tx}=data;
   const [section,setSection]=useState("members");
   const [expSel,setExpSel]=useState({tx:true,fixed:true,categories:false,accounts:false,budgets:false});
+  const [genBusy,setGenBusy]=useState(false);
   const SECS=[["members","구성원"],["accounts","계좌"],["categories","카테고리"],["budgets","예산"],["fixed","고정지출 템플릿"],["export","엑셀 내보내기"]];
 
   const addMember=()=>setMembers([...members,{id:"m_"+uid(),name:"새 구성원",color:CAT_PALETTE[members.length%8]}]);
@@ -807,11 +808,14 @@ function SettingsView({data}){
   const updFixed=(id,patch)=>setFixedTemplates(fixedTemplates.map(x=>x.id===id?{...x,...patch}:x));
 
   const runGenerate=async()=>{
+    if(genBusy) return; // 연타 방지 — 응답 오기 전 중복 요청 자체를 차단
+    setGenBusy(true);
     try{
       const r=await generateFixedTxReq();
       await refreshTxAndFixed(); // 백엔드가 반영한 최신 거래·템플릿을 즉시 재조회(30초 폴링을 기다리지 않고 바로 내역·월배분·대시보드에 반영)
       toast(`고정지출 생성 완료 — 신규 ${r.created}건`);
     }catch(e){ toast("생성 실패: "+e.message); }
+    finally{ setGenBusy(false); }
   };
 
   const styleHeader=(ws,head)=>{head.forEach((_,i)=>{const cell=ws[XLSX.utils.encode_cell({r:0,c:i})];if(cell)cell.s={font:{bold:true,color:{rgb:"FFFFFF"}},fill:{fgColor:{rgb:"2A78D6"}}};});ws["!cols"]=head.map(()=>({wch:14}));};
@@ -920,7 +924,20 @@ function SettingsView({data}){
 
       {section==="fixed"&&<Card>
         <CardHead title="고정지출 템플릿" sub="매달 납부일이 되면 자동으로 거래내역에 생성됩니다. 납부계좌=결제(출금) 계좌 · 배분계좌=비용이 귀속되는 계좌(월배분 탭 집계 기준). ▲▼로 순서 변경, 좌측 색상 띠는 구성원 색상"
-          right={<div style={{display:"flex",gap:6}}><button onClick={runGenerate} style={btnFlat}>지금 생성 실행</button><button onClick={addFixed} style={btnFlat}>＋ 추가</button></div>}/>
+          right={<div style={{display:"flex",gap:6}}><button onClick={runGenerate} disabled={genBusy} style={{...btnFlat,opacity:genBusy?0.6:1}}>{genBusy?"처리 중…":"지금 생성 실행"}</button><button onClick={addFixed} style={btnFlat}>＋ 추가</button></div>}/>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+          {members.map(m=>{
+            const nowYm=currentYm();
+            const total=fixedTemplates.filter(f=>f.memberId===m.id&&f.startYm&&f.startYm<=nowYm&&(!f.endYm||f.endYm>=nowYm)).reduce((s,f)=>s+(Number(f.amount)||0),0);
+            return(<div key={m.id} style={{flex:1,minWidth:140,background:BG.card,border:`1px solid ${INK.border}`,borderLeft:`4px solid ${m.color}`,borderRadius:10,padding:"10px 12px"}}>
+              <div style={{fontSize:11.5,color:INK.muted,fontWeight:600,marginBottom:2}}>{m.name} 고정지출 합계(이번 달 기준)</div>
+              <div style={{fontSize:17,fontWeight:800,color:INK.primary,fontVariantNumeric:"tabular-nums"}}>{fmtWon(total)}</div>
+            </div>);
+          })}
+        </div>
+        <div style={{fontSize:11.5,color:INK.muted,background:BG.page,border:`1px solid ${INK.border}`,borderRadius:8,padding:"8px 10px",marginBottom:10,lineHeight:1.6}}>
+          ℹ️ "지금 생성 실행"은 <b>지금 당장 이번 달 내역에 반영하고 싶을 때만</b> 누르는 버튼입니다 — 누르지 않아도 매일 새벽 자동으로 그날 도래한 납부일 항목이 내역에 생성됩니다. 여러 번 눌러도 같은 달에 중복 생성되지 않습니다. 템플릿의 금액·항목을 수정해도 <b>이미 생성된 과거 달의 내역은 바뀌지 않습니다</b>.
+        </div>
         {fixedTemplates.map((f,idx)=>{const owner=members.find(m=>m.id===f.memberId);
           return(<div key={f.id} style={{display:"flex",gap:8,marginBottom:8}}>
             <ReorderBtns onUp={()=>setFixedTemplates(moveItem(fixedTemplates,idx,-1))} onDown={()=>setFixedTemplates(moveItem(fixedTemplates,idx,1))} disabledUp={idx===0} disabledDown={idx===fixedTemplates.length-1}/>
