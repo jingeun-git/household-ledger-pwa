@@ -803,7 +803,7 @@ function SettingsView({data}){
   const addMember=()=>setMembers([...members,{id:"m_"+uid(),name:"새 구성원",color:CAT_PALETTE[members.length%8]}]);
   const addAccount=()=>setAccounts([...accounts,{id:"a_"+uid(),memberId:members[0]?.id||"",bank:"",note:"",color:CAT_PALETTE[accounts.length%8]}]);
   const addCategory=()=>setCategories([...categories,{id:"c_"+uid(),name:"새 카테고리",desc:"",color:CAT_PALETTE_EXT[categories.length%10],preset:false}]);
-  const addFixed=()=>setFixedTemplates([...fixedTemplates,{id:"f_"+uid(),name:"",categoryId:categories[0]?.id||"",memberId:members[0]?.id||"",payAccountId:"",allocAccountId:"",dueDay:15,amount:"",active:true,lastGeneratedYm:"",memo:""}]);
+  const addFixed=()=>setFixedTemplates([...fixedTemplates,{id:"f_"+uid(),name:"",categoryId:categories[0]?.id||"",memberId:members[0]?.id||"",payAccountId:"",allocAccountId:"",dueDay:15,amount:"",startYm:currentYm(),endYm:"",lastGeneratedYm:"",memo:""}]);
   const updFixed=(id,patch)=>setFixedTemplates(fixedTemplates.map(x=>x.id===id?{...x,...patch}:x));
 
   const runGenerate=async()=>{
@@ -826,9 +826,9 @@ function SettingsView({data}){
       XLSX.utils.book_append_sheet(wb,ws,"거래내역");
     }
     if(expSel.fixed){
-      const head=["이름","카테고리","구성원","납부계좌","배분계좌","납부일","금액","활성화","메모"];
+      const head=["이름","카테고리","구성원","납부계좌","배분계좌","납부일","금액","적용기간","비고"];
       const aoa=[head,...fixedTemplates.map(f=>[f.name,categories.find(c=>c.id===f.categoryId)?.name||"",members.find(m=>m.id===f.memberId)?.name||"",
-        accounts.find(a=>a.id===f.payAccountId)?.bank||"",accounts.find(a=>a.id===f.allocAccountId)?.bank||"",f.dueDay,f.amount,f.active?"Y":"N",f.memo||""])];
+        accounts.find(a=>a.id===f.payAccountId)?.bank||"",accounts.find(a=>a.id===f.allocAccountId)?.bank||"",f.dueDay,f.amount,`${f.startYm||""} ~ ${f.endYm||"계속"}`,f.memo||""])];
       const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
       XLSX.utils.book_append_sheet(wb,ws,"고정지출템플릿");
     }
@@ -945,10 +945,11 @@ function SettingsView({data}){
                 <Field label="금액(원)"><MoneyInput value={f.amount} onChange={v=>updFixed(f.id,{amount:v})}/></Field>
                 <span onClick={()=>setFixedTemplates(fixedTemplates.filter(x=>x.id!==f.id))} style={{cursor:"pointer",color:"#cbd5e1",alignSelf:"center",justifySelf:"end"}}>✕ 삭제</span>
               </div>
-              <label style={{display:"flex",alignItems:"center",gap:6,marginTop:8,fontSize:12,color:INK.secondary}}>
-                <input type="checkbox" checked={f.active} onChange={()=>updFixed(f.id,{active:!f.active})} style={{accentColor:PRIMARY}}/>
-                활성화 (해제하면 자동생성 대상에서 제외)
-              </label>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginTop:8}}>
+                <Field label="적용 시작월"><input type="month" style={inputSt} value={f.startYm||""} onChange={e=>updFixed(f.id,{startYm:e.target.value})}/></Field>
+                <Field label="적용 종료월(비우면 계속)"><input type="month" style={inputSt} value={f.endYm||""} onChange={e=>updFixed(f.id,{endYm:e.target.value})}/></Field>
+                <Field label="비고"><input style={inputSt} placeholder="예: 25.12월부터 만기삭제" value={f.memo||""} onChange={e=>updFixed(f.id,{memo:e.target.value})}/></Field>
+              </div>
             </div>
           </div>);})}
       </Card>}
