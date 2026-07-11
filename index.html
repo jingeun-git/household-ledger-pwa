@@ -16,6 +16,7 @@ html,body{margin:0;padding:0;background:#f8fafc;-webkit-tap-highlight-color:tran
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 <script src="https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div id="root"></div>
@@ -23,22 +24,30 @@ html,body{margin:0;padding:0;background:#f8fafc;-webkit-tap-highlight-color:tran
 const {useState,useEffect,useRef,useMemo}=React;
 
 // ══════════════════════════════════════════════════════════════════
-// 클라우드 동기화 계층 (Apps Script 백엔드) — TaskBoard와 동일 패턴
+// 클라우드 동기화 계층 (Apps Script 백엔드) — Google 계정 로그인(세션 토큰) 기반
+// 과거 공유 비밀 토큰(APP_SECRET) 방식은 GitHub Pages가 Public이라 페이지 소스에 그대로
+// 노출되는 구조적 한계가 있어 폐기 — 이제는 등록된 Google 계정으로 로그인해야만 세션 토큰이 발급된다.
 // ══════════════════════════════════════════════════════════════════
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwc3j1cG2WkZAiPYLW6a4tZtKNW3L-gtQa8bjrZr1b7J22KoRHEQiG7iOeLdxqeQ3Z9nA/exec";
-const APP_SECRET = "34r3498ry98hfjnf23djbfo23iuho8ynekfre3";
+const GOOGLE_CLIENT_ID = "457529892194-utbnqihap22pf00a4t71tq27e6gedp92.apps.googleusercontent.com";
 const SYNC_INTERVAL_MS = 30000; // 30초 폴링 — 데스크탑↔모바일 양방향 반영
+const SESSION_STORAGE_KEY = "ledger_session_token";
+
+const getSessionToken=()=>localStorage.getItem(SESSION_STORAGE_KEY);
+const setSessionToken=(t)=>{ if(t) localStorage.setItem(SESSION_STORAGE_KEY,t); else localStorage.removeItem(SESSION_STORAGE_KEY); };
 
 async function cloudGetAll(){
-  const res = await fetch(`${APPS_SCRIPT_URL}?t=${Date.now()}&secret=${encodeURIComponent(APP_SECRET)}`);
+  const token=getSessionToken();
+  const res = await fetch(`${APPS_SCRIPT_URL}?t=${Date.now()}&token=${encodeURIComponent(token||"")}`);
   if(!res.ok) throw new Error("cloud fetch failed: "+res.status);
   const data = await res.json();
-  if(data.ok===false) throw new Error(data.error||"인증 실패 — APP_SECRET을 확인하세요");
+  if(data.ok===false) throw new Error(data.error||"unauthorized");
   return data;
 }
 async function cloudPost(payload){
-  const res = await fetch(APPS_SCRIPT_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({...payload,secret:APP_SECRET})});
+  const token=getSessionToken();
+  const res = await fetch(APPS_SCRIPT_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({...payload,token})});
   if(!res.ok) throw new Error("cloud post failed: "+res.status);
   return await res.json();
 }
@@ -48,6 +57,8 @@ async function cloudSet(key,value){
   return data;
 }
 const generateFixedTxReq=()=>cloudPost({action:"generateFixedTx"});
+const googleLoginReq=(idToken)=>cloudPost({action:"googleLogin",idToken});
+const logoutReq=()=>cloudPost({action:"logout"});
 
 // ══════════════════════════════════════════════════════════════════
 // 색상·상수 — dataviz 검증 팔레트(가시성 확보: 넓은 영역은 옅게, 키컬러만 채도 유지)
@@ -956,10 +967,64 @@ function SettingsView({data}){
 }
 
 // ══════════════════════════════════════════════════════════════════
+// 로그인 화면 — 등록된 Google 계정만 통과(허용목록은 Apps Script ALLOWED_EMAILS에서 관리)
+// ══════════════════════════════════════════════════════════════════
+
+const LOGIN_ERR_MSG={
+  not_allowed:"등록되지 않은 계정입니다 — 관리자에게 계정 등록을 요청하세요",
+  invalid_token:"로그인 확인에 실패했습니다 — 다시 시도해주세요",
+  client_mismatch:"앱 설정 오류(클라이언트 ID 불일치) — 관리자에게 문의하세요",
+  email_not_verified:"이메일이 확인되지 않은 계정입니다",
+  missing_token:"로그인 정보를 받지 못했습니다 — 다시 시도해주세요",
+};
+
+function LoginScreen({onLoggedIn}){
+  const btnRef=useRef(null);
+  const [err,setErr]=useState("");
+  const [busy,setBusy]=useState(false);
+
+  useEffect(()=>{
+    let cancelled=false;
+    const tryInit=()=>{
+      if(cancelled) return;
+      if(!window.google||!window.google.accounts||!window.google.accounts.id){ setTimeout(tryInit,200); return; }
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async (resp)=>{
+          setBusy(true); setErr("");
+          try{
+            const r=await googleLoginReq(resp.credential);
+            if(!r.ok) throw new Error(LOGIN_ERR_MSG[r.error]||r.error||"로그인 실패");
+            setSessionToken(r.token);
+            onLoggedIn();
+          }catch(e){ setErr(e.message); }
+          setBusy(false);
+        }
+      });
+      if(btnRef.current) window.google.accounts.id.renderButton(btnRef.current,{theme:"outline",size:"large",width:272});
+    };
+    tryInit();
+    return ()=>{ cancelled=true; };
+  },[]);
+
+  return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:BG.page,fontFamily:"system-ui,-apple-system,'Segoe UI',sans-serif"}}>
+    <div style={{background:"#fff",borderRadius:16,padding:"38px 34px",boxShadow:"0 4px 24px rgba(15,23,42,.08)",textAlign:"center",width:320,border:`1px solid ${INK.border}`}}>
+      <div style={{fontSize:34,marginBottom:10}}>💰</div>
+      <div style={{fontWeight:800,fontSize:17,color:INK.primary,marginBottom:6}}>가계부</div>
+      <div style={{fontSize:12,color:INK.muted,marginBottom:22}}>등록된 Google 계정으로 로그인하세요</div>
+      <div ref={btnRef} style={{display:"flex",justifyContent:"center"}}/>
+      {busy&&<div style={{fontSize:12,color:INK.muted,marginTop:14}}>로그인 처리 중...</div>}
+      {err&&<div style={{fontSize:12,color:STATUS.critical,marginTop:14}}>{err}</div>}
+    </div>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════
 // 메인 App
 // ══════════════════════════════════════════════════════════════════
 
 function App(){
+  const [authed,setAuthed]=useState(()=>!!getSessionToken());
   const [loaded,setLoaded]=useState(false);
   const [cloudOk,setCloudOk]=useState(true);
   const [tab,setTab]=useState("dash");
@@ -981,7 +1046,11 @@ function App(){
 
   const toast=msg=>{setToastMsg(msg);setTimeout(()=>setToastMsg(null),3200);};
 
+  // 세션 만료·거부 시 공통 처리 — 토큰을 지우고 로그인 화면으로 되돌린다
+  const forceLogout=()=>{ setSessionToken(null); setAuthed(false); setLoaded(false); };
+
   useEffect(()=>{
+    if(!authed) return;
     (async()=>{
       try{
         const d=await cloudGetAll();
@@ -999,10 +1068,14 @@ function App(){
         load("ledger_alloc_adjust",setAllocAdjustRaw,{});
         load("ledger_config",setConfigRaw,DEF_CONFIG);
         setCloudOk(true);
-      }catch(e){ console.error(e); setCloudOk(false); toast("클라우드 연결 실패 — "+e.message); }
+      }catch(e){
+        console.error(e);
+        if(String(e.message).includes("unauthorized")){ forceLogout(); return; }
+        setCloudOk(false); toast("클라우드 연결 실패 — "+e.message);
+      }
       setLoaded(true);
     })();
-  },[]);
+  },[authed]);
 
   // 저장 헬퍼 — 최초 로드 직후 1회는 저장 스킵(방금 받은 값 그대로 되돌려쓰기 방지)
   // 클라우드 저장은 700ms 디바운스 — 타이핑 중 매 글자마다 네트워크 요청을 쏘면 요청이 겹쳐 쌓이다가
@@ -1056,15 +1129,21 @@ function App(){
         maybe("ledger_alloc_adjust",allocAdjust,setAllocAdjustRaw);
         maybe("ledger_config",config,setConfigRaw);
         setCloudOk(true);
-      }catch(e){ setCloudOk(false); }
+      }catch(e){
+        if(String(e.message).includes("unauthorized")){ forceLogout(); return; }
+        setCloudOk(false);
+      }
     },SYNC_INTERVAL_MS);
     return ()=>clearInterval(iv);
   },[loaded,members,accounts,categories,tx,fixedTemplates,budgets,allocAdjust,config]);
+
+  const doLogout=async()=>{ try{ await logoutReq(); }catch(e){} forceLogout(); };
 
   const data={tx,setTx,members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,allocAdjust,setAllocAdjust,config,setConfig,toast,refreshTxAndFixed};
 
   const TABS=[["dash","📊 대시보드"],["cal","📅 캘린더"],["tx","📝 내역"],["alloc","🧮 월배분"],["settings","⚙ 설정"]];
 
+  if(!authed) return <LoginScreen onLoggedIn={()=>setAuthed(true)}/>;
   if(!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:INK.muted,fontSize:13}}>불러오는 중...</div>;
 
   return(<div style={{display:"flex",flexDirection:"column",height:"100vh",fontFamily:"system-ui,-apple-system,'Segoe UI',sans-serif"}}>
@@ -1076,10 +1155,13 @@ function App(){
             style={{padding:"7px 12px",borderRadius:9,border:"none",background:tab===k?PRIMARY:"transparent",color:tab===k?"#fff":INK.secondary,fontSize:12.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>))}
         </div>
       </div>
-      <span style={{fontSize:11,color:cloudOk?INK.muted:STATUS.critical,display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-        <span style={{width:7,height:7,borderRadius:"50%",background:cloudOk?STATUS.good:STATUS.critical,display:"inline-block"}}/>
-        {cloudOk?"동기화됨":"연결 끊김"}
-      </span>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <span style={{fontSize:11,color:cloudOk?INK.muted:STATUS.critical,display:"flex",alignItems:"center",gap:5}}>
+          <span style={{width:7,height:7,borderRadius:"50%",background:cloudOk?STATUS.good:STATUS.critical,display:"inline-block"}}/>
+          {cloudOk?"동기화됨":"연결 끊김"}
+        </span>
+        <span onClick={doLogout} style={{fontSize:11,color:INK.muted,cursor:"pointer",whiteSpace:"nowrap"}}>로그아웃</span>
+      </div>
     </div>
 
     {tab==="dash"&&<DashboardView data={data} ym={ym} setYm={setYm}/>}
