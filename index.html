@@ -977,6 +977,7 @@ function App(){
 
   const lastSyncRef=useRef({});
   const skipSaveRef=useRef(new Set());
+  const debounceRef=useRef({});
 
   const toast=msg=>{setToastMsg(msg);setTimeout(()=>setToastMsg(null),3200);};
 
@@ -1004,12 +1005,18 @@ function App(){
   },[]);
 
   // 저장 헬퍼 — 최초 로드 직후 1회는 저장 스킵(방금 받은 값 그대로 되돌려쓰기 방지)
+  // 클라우드 저장은 700ms 디바운스 — 타이핑 중 매 글자마다 네트워크 요청을 쏘면 요청이 겹쳐 쌓이다가
+  // 일부가 실패("failed to fetch")하는 문제가 있었음. 로컬 state는 즉시 반영(입력 반응성 유지),
+  // 클라우드 저장만 타이핑이 멈춘 뒤 한 번에 보낸다.
   function makeSetter(key,raw,setRaw){
     return (next)=>{
       const val=typeof next==="function"?next(raw):next;
       setRaw(val);
       if(skipSaveRef.current.has(key)){ skipSaveRef.current.delete(key); return; }
-      cloudSet(key,JSON.stringify(val)).then(r=>{lastSyncRef.current[key]=r.updatedAt;}).catch(e=>toast("저장 실패: "+e.message));
+      if(debounceRef.current[key]) clearTimeout(debounceRef.current[key]);
+      debounceRef.current[key]=setTimeout(()=>{
+        cloudSet(key,JSON.stringify(val)).then(r=>{lastSyncRef.current[key]=r.updatedAt;}).catch(e=>toast("저장 실패: "+e.message));
+      },700);
     };
   }
   const setMembers=makeSetter("ledger_members",members,setMembersRaw);
