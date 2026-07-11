@@ -48,7 +48,6 @@ async function cloudSet(key,value){
   return data;
 }
 const generateFixedTxReq=()=>cloudPost({action:"generateFixedTx"});
-const backupNowReq=()=>cloudPost({action:"backupNow"});
 
 // ══════════════════════════════════════════════════════════════════
 // 색상·상수 — dataviz 검증 팔레트(가시성 확보: 넓은 영역은 옅게, 키컬러만 채도 유지)
@@ -61,7 +60,7 @@ const INK={primary:"#1e293b",secondary:"#475569",muted:"#94a3b8",border:"#e2e8f0
 const BG={page:"#f8fafc",card:"#ffffff",tint:"#eff6ff",tintBorder:"#bfdbfe"};
 const EXPENSE_COLOR="#e34948", INCOME_COLOR="#1baf7a", PRIMARY="#2a78d6";
 const MUTED_SLOT="#a8a29e"; // "기타" 집계 버킷 전용 (실제 카테고리 색과 혼동되지 않도록)
-const WIDE="min(1560px, 92vw)"; // 각 탭 콘텐츠 컨테이너 폭 — 와이드 모니터에서도 자연스럽게 채워지도록 뷰포트 기준 가변폭(고정 1040px 대비 확장)
+const WIDE="min(1560px, 92vw)"; // 각 탭 콘텐츠 컨테이너 폭 — 와이드 모니터에서도 자연스럽게 채워지도록 뷰포트 기준 가변폭
 
 const uid=()=>Math.random().toString(36).slice(2,9);
 const nowIso=()=>new Date().toISOString();
@@ -71,6 +70,16 @@ const addYm=(ym,n)=>{const[y,m]=ym.split("-").map(Number);const d=new Date(y,m-1
 const fmtWon=n=>(Number(n)||0).toLocaleString("ko-KR")+"원";
 const fmtNum=n=>(Number(n)||0).toLocaleString("ko-KR");
 const todayStr=()=>new Date().toISOString().slice(0,10);
+const fmtDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const moveItem=(arr,idx,dir)=>{const j=idx+dir;if(j<0||j>=arr.length)return arr;const next=[...arr];[next[idx],next[j]]=[next[j],next[idx]];return next;};
+function buildMonthWeeks(y,m){
+  const first=new Date(y,m,1);
+  const start=new Date(first); start.setDate(start.getDate()-start.getDay());
+  const last=new Date(y,m+1,0);
+  const weeks=[]; let cur=new Date(start);
+  do{ const w=[]; for(let i=0;i<7;i++){w.push(new Date(cur));cur.setDate(cur.getDate()+1);} weeks.push(w); }while(cur<=last);
+  return weeks;
+}
 
 const DEF_MEMBERS=[{id:"m1",name:"구성원1",color:CAT_PALETTE[0]},{id:"m2",name:"구성원2",color:CAT_PALETTE[5]}];
 const DEF_CATEGORIES=[
@@ -85,7 +94,7 @@ const DEF_CATEGORIES=[
   {id:"c9",name:"적금",desc:"적금 불입 비용",color:CAT_PALETTE_EXT[8],preset:true},
   {id:"c10",name:"기타",desc:"세금 등 기타 지출 비용",color:CAT_PALETTE_EXT[9],preset:true},
 ];
-const DEF_CONFIG={widgets:{kpi:true,memberCompare:true,categoryPie:true,fixedVsVariable:true,trend:true,budget:true,accounts:true}};
+const DEF_CONFIG={widgets:{kpi:true,memberCompare:true,memberIncome:true,categoryPie:true,fixedVsVariable:true,trend:true,budget:true,accounts:true}};
 
 // ══════════════════════════════════════════════════════════════════
 // 파생 통계 헬퍼 — tx 배열에서 매번 계산 (누적 카운터 저장 금지)
@@ -107,18 +116,23 @@ function householdStats(tx,ym){
   const expense=sumBy(inYm,t=>t.type==="expense");
   return {income,expense,balance:income-expense};
 }
-// 계좌별: 납부액(실제 출금) vs 배분액(귀속 — allocAccountId 우선, 없으면 payAccountId로 귀속)
+// 계좌별 배분 — "어느 계좌에서 실제로 출금됐는지"가 아니라 "어느 계좌 몫으로 귀속되는지"만 계산.
+// 변동지출·고정지출을 분리 집계(변동=납부액, 고정=자동 배분액) — 귀속 계좌는 allocAccountId 우선, 없으면 payAccountId.
 function accountAlloc(tx,ym,accountId){
   const inYm=txInYm(tx,ym).filter(t=>t.type==="expense");
-  const paid=sumBy(inYm,t=>t.payAccountId===accountId);
-  const alloc=sumBy(inYm,t=>(t.allocAccountId?t.allocAccountId:t.payAccountId)===accountId);
-  return {paid,alloc};
+  const variableAlloc=sumBy(inYm,t=>t.kind==="variable"&&(t.allocAccountId?t.allocAccountId:t.payAccountId)===accountId);
+  const fixedAlloc=sumBy(inYm,t=>t.kind==="fixed"&&(t.allocAccountId?t.allocAccountId:t.payAccountId)===accountId);
+  return {variableAlloc,fixedAlloc,alloc:variableAlloc+fixedAlloc};
 }
 function categoryBreakdown(tx,ym,categories){
   const inYm=txInYm(tx,ym).filter(t=>t.type==="expense");
   const byId={};
   inYm.forEach(t=>{byId[t.categoryId]=(byId[t.categoryId]||0)+(Number(t.amount)||0);});
   return categories.map(c=>({...c,amount:byId[c.id]||0})).filter(c=>c.amount>0).sort((a,b)=>b.amount-a.amount);
+}
+function dailyTotals(tx,dateStr){
+  const dayTx=tx.filter(t=>t.date===dateStr);
+  return {income:sumBy(dayTx,t=>t.type==="income"),expense:sumBy(dayTx,t=>t.type==="expense")};
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -144,7 +158,7 @@ function ColorDot({color,size=8}){
 }
 
 function CardHead({title,sub,right}){
-  return(<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+  return(<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,flexWrap:"wrap",gap:8}}>
     <div>
       <div style={{fontSize:13,fontWeight:700,color:INK.primary}}>{title}</div>
       {sub&&<div style={{fontSize:10.5,color:INK.muted,marginTop:2}}>{sub}</div>}
@@ -157,12 +171,73 @@ function Card({children,style}){
   return <div style={{background:BG.card,borderRadius:14,border:`1px solid ${INK.border}`,boxShadow:"0 1px 6px rgba(15,23,42,.04)",padding:"16px 18px",animation:"fadeUp .3s ease",...style}}>{children}</div>;
 }
 
+// 가로 스크롤 래퍼 공용 스타일 — 모바일 관성 스크롤(momentum) + 스크롤이 가장자리에 닿아도 페이지 전체가 같이 흔들리지 않도록 격리
+const hScrollSt={overflowX:"auto",WebkitOverflowScrolling:"touch",overscrollBehaviorX:"contain"};
+
 function MonthPicker({ym,setYm}){
   return(<div style={{display:"flex",alignItems:"center",gap:8}}>
     <button onClick={()=>setYm(addYm(ym,-1))} style={btnGhost}>◀</button>
     <span style={{fontWeight:800,fontSize:15,color:INK.primary,minWidth:96,textAlign:"center"}}>{ymLabel(ym)}</span>
     <button onClick={()=>setYm(addYm(ym,1))} style={btnGhost}>▶</button>
     {ym!==currentYm()&&<button onClick={()=>setYm(currentYm())} style={btnTint}>이번 달</button>}
+  </div>);
+}
+
+// 라벨 붙은 입력 필드 래퍼 — 폼 헤더 역할(반응형 grid 줄바꿈에도 라벨-입력 쌍이 항상 붙어있어 어긋나지 않음)
+function Field({label,children}){
+  return(<div style={{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
+    <span style={{fontSize:10.5,fontWeight:700,color:INK.muted}}>{label}</span>
+    {children}
+  </div>);
+}
+
+// 천단위 콤마 자동 포맷 + 우측정렬 + "원" 단위 표시 금액 입력
+function MoneyInput({value,onChange,placeholder}){
+  const display=(value===""||value===undefined||value===null)?"":Number(value).toLocaleString("ko-KR");
+  return(<div style={{position:"relative"}}>
+    <input style={{...inputSt,textAlign:"right",paddingRight:28}} placeholder={placeholder||"0"} inputMode="numeric" value={display}
+      onChange={e=>{const raw=e.target.value.replace(/[^0-9]/g,"");onChange(raw===""?"":Number(raw));}}/>
+    <span style={{position:"absolute",right:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:INK.muted,pointerEvents:"none"}}>원</span>
+  </div>);
+}
+
+// 위/아래 이동 버튼 — 리스트 순서 변경(데스크탑·모바일 터치 모두 동일하게 안정적으로 동작)
+function ReorderBtns({onUp,onDown,disabledUp,disabledDown}){
+  return(<div style={{display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
+    <button type="button" onClick={onUp} disabled={disabledUp} style={{...btnGhost,width:22,height:17,fontSize:9,padding:0,opacity:disabledUp?0.3:1,cursor:disabledUp?"default":"pointer"}}>▲</button>
+    <button type="button" onClick={onDown} disabled={disabledDown} style={{...btnGhost,width:22,height:17,fontSize:9,padding:0,opacity:disabledDown?0.3:1,cursor:disabledDown?"default":"pointer"}}>▼</button>
+  </div>);
+}
+
+// "매달 며칠"만 고르는 미니 달력 팝업 — 실제 월 달력에서 날짜를 클릭하면 "일"만 추출해 저장(요일·월 자체는 의미 없음)
+function DayOfMonthPicker({value,onChange}){
+  const [open,setOpen]=useState(false);
+  const today=new Date();
+  const [ref,setRef]=useState({y:today.getFullYear(),m:today.getMonth()});
+  const weeks=useMemo(()=>buildMonthWeeks(ref.y,ref.m),[ref]);
+  const wd=["일","월","화","수","목","금","토"];
+  return(<div style={{position:"relative"}}>
+    <button type="button" onClick={()=>setOpen(o=>!o)} style={{...inputSt,textAlign:"left",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <span>{value?`매달 ${value}일`:"납부일 선택"}</span><span style={{fontSize:11}}>📅</span>
+    </button>
+    {open&&<>
+      <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:140}}/>
+      <div style={{position:"absolute",zIndex:150,top:"110%",left:0,background:"#fff",border:`1px solid ${INK.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:10,width:232}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <button type="button" onClick={()=>setRef(r=>{const d=new Date(r.y,r.m-1,1);return{y:d.getFullYear(),m:d.getMonth()};})} style={btnGhost}>◀</button>
+          <span style={{fontSize:12.5,fontWeight:700,color:INK.primary}}>{ref.y}년 {ref.m+1}월</span>
+          <button type="button" onClick={()=>setRef(r=>{const d=new Date(r.y,r.m+1,1);return{y:d.getFullYear(),m:d.getMonth()};})} style={btnGhost}>▶</button>
+        </div>
+        <div style={{fontSize:9.5,color:INK.muted,textAlign:"center",marginBottom:5}}>클릭한 날짜의 "일"만 매달 반복 납부일로 저장됩니다</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+          {wd.map(w=><div key={w} style={{fontSize:10,textAlign:"center",color:INK.muted,fontWeight:700}}>{w}</div>)}
+          {weeks.flat().map((d,i)=>{const inM=d.getMonth()===ref.m;const day=d.getDate();const sel=inM&&Number(value)===day;
+            return <div key={i} onClick={()=>{if(!inM)return;onChange(day);setOpen(false);}}
+              style={{fontSize:11.5,textAlign:"center",padding:"5px 0",borderRadius:6,cursor:inM?"pointer":"default",
+                color:!inM?"#e2e8f0":sel?"#fff":INK.primary,background:sel?PRIMARY:"transparent",fontWeight:sel?800:500}}>{day}</div>;})}
+        </div>
+      </div>
+    </>}
   </div>);
 }
 
@@ -205,26 +280,28 @@ function CategoryDonut({tx,ym,categories}){
 }
 
 // ══════════════════════════════════════════════════════════════════
-// 6개월 수입/지출 추이 라인차트 — 순수 SVG, 포인트별 <title> 툴팁
+// 수입/지출 추이 라인차트 — 최대 24개월, 기간·종료월 선택 가능
 // ══════════════════════════════════════════════════════════════════
 
-function TrendChart({tx,ym}){
-  const months=useMemo(()=>{const arr=[];for(let i=5;i>=0;i--)arr.push(addYm(ym,-i));return arr;},[ym]);
-  const data=months.map(m=>householdStats(tx,m));
+function TrendChart({tx,endYm,months}){
+  const list=useMemo(()=>{const arr=[];for(let i=months-1;i>=0;i--)arr.push(addYm(endYm,-i));return arr;},[endYm,months]);
+  const data=list.map(m=>householdStats(tx,m));
   const max=Math.max(1,...data.map(d=>Math.max(d.income,d.expense)));
-  const W=560,H=140,PAD=28;
-  const x=i=>PAD+i*((W-PAD*2)/(months.length-1));
+  const W=Math.max(560,months*38),H=140,PAD=28;
+  const x=i=>PAD+i*((W-PAD*2)/Math.max(1,list.length-1));
   const y=v=>H-PAD-(v/max)*(H-PAD*1.6);
   const path=key=>data.map((d,i)=>`${i===0?"M":"L"}${x(i)},${y(d[key])}`).join(" ");
-  return(<div style={{overflowX:"auto"}}>
+  const labelEvery=months>18?3:(months>12?2:1);
+  const lbl=(m,i)=>{const [yy,mm]=m.split("-");return (mm==="01"||i===0)?`${yy.slice(2)}.${mm}`:`${Number(mm)}월`;};
+  return(<div style={hScrollSt}>
     <svg width={W} height={H+22} style={{minWidth:W}}>
       {[0,0.5,1].map(f=>(<line key={f} x1={PAD} x2={W-PAD} y1={y(max*f)} y2={y(max*f)} stroke="#e1e0d9" strokeWidth="1"/>))}
       <path d={path("expense")} fill="none" stroke={EXPENSE_COLOR} strokeWidth="2.2"/>
       <path d={path("income")} fill="none" stroke={INCOME_COLOR} strokeWidth="2.2"/>
       {data.map((d,i)=>(<g key={i}>
-        <circle cx={x(i)} cy={y(d.expense)} r="4" fill={EXPENSE_COLOR}><title>{months[i]} 지출 {fmtWon(d.expense)}</title></circle>
-        <circle cx={x(i)} cy={y(d.income)} r="4" fill={INCOME_COLOR}><title>{months[i]} 수입 {fmtWon(d.income)}</title></circle>
-        <text x={x(i)} y={H} textAnchor="middle" fontSize="10" fill={INK.muted}>{months[i].slice(5)}월</text>
+        <circle cx={x(i)} cy={y(d.expense)} r="4" fill={EXPENSE_COLOR}><title>{list[i]} 지출 {fmtWon(d.expense)}</title></circle>
+        <circle cx={x(i)} cy={y(d.income)} r="4" fill={INCOME_COLOR}><title>{list[i]} 수입 {fmtWon(d.income)}</title></circle>
+        {(i%labelEvery===0||i===data.length-1)&&<text x={x(i)} y={H} textAnchor="middle" fontSize="10" fill={INK.muted}>{lbl(list[i],i)}</text>}
       </g>))}
     </svg>
     <div style={{display:"flex",gap:14,fontSize:11,color:INK.secondary,marginTop:2}}>
@@ -241,29 +318,38 @@ function TrendChart({tx,ym}){
 function DashboardView({data,ym,setYm}){
   const {tx,members,categories,accounts,budgets,config,setConfig}=data;
   const [showCfg,setShowCfg]=useState(false);
+  const [trendMonths,setTrendMonths]=useState(12);
+  const [trendEndYm,setTrendEndYm]=useState(currentYm());
   const w=config.widgets||DEF_CONFIG.widgets;
   const hh=householdStats(tx,ym);
   const mStats=members.map(m=>({m,s:memberStats(tx,ym,m.id)}));
   const maxExp=Math.max(1,...mStats.map(x=>x.s.totalExp));
+  const maxInc=Math.max(1,...mStats.map(x=>x.s.income));
   const fixSum=sumBy(txInYm(tx,ym),t=>t.type==="expense"&&t.kind==="fixed");
   const varSum=sumBy(txInYm(tx,ym),t=>t.type==="expense"&&t.kind==="variable");
   const fvTotal=fixSum+varSum||1;
-  const budgetRows=budgets.filter(b=>Number(b.limit)>0).map(b=>{
-    const cat=categories.find(c=>c.id===b.categoryId);
-    const spent=sumBy(txInYm(tx,ym),t=>t.type==="expense"&&t.categoryId===b.categoryId);
-    const pct=Math.round(spent/Number(b.limit)*100);
-    const color=pct>=100?STATUS.critical:pct>=70?STATUS.warning:STATUS.good;
-    return {cat,spent,limit:Number(b.limit),pct,color};
-  }).filter(r=>r.cat);
-  const WKEYS=[["kpi","수입·지출 요약"],["memberCompare","구성원별 비교"],["categoryPie","카테고리 도넛차트"],["fixedVsVariable","고정↔변동 비율"],["trend","6개월 추이"],["budget","예산 진행률"],["accounts","계좌별 배분 요약"]];
 
-  return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
+  // 예산은 구성원별로 등록되므로 카테고리 합계를 자동 계산
+  const budgetByCat={};
+  budgets.forEach(b=>{ if(!Number(b.limit)) return; budgetByCat[b.categoryId]=(budgetByCat[b.categoryId]||0)+Number(b.limit); });
+  const budgetRows=Object.keys(budgetByCat).map(catId=>{
+    const cat=categories.find(c=>c.id===catId);
+    const spent=sumBy(txInYm(tx,ym),t=>t.type==="expense"&&t.categoryId===catId);
+    const limit=budgetByCat[catId];
+    const pct=Math.round(spent/limit*100);
+    const color=pct>=100?STATUS.critical:pct>=70?STATUS.warning:STATUS.good;
+    return {cat,spent,limit,pct,color};
+  }).filter(r=>r.cat);
+
+  const WKEYS=[["kpi","수입·지출 요약"],["memberCompare","구성원별 지출 비교"],["memberIncome","구성원별 수입 비교"],["categoryPie","카테고리 도넛차트"],["fixedVsVariable","고정↔변동 비율"],["trend","수입·지출 추이"],["budget","예산 진행률"],["accounts","계좌별 배분 요약"]];
+
+  return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
     <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
         <MonthPicker ym={ym} setYm={setYm}/>
         <div style={{position:"relative"}}>
           <button onClick={()=>setShowCfg(v=>!v)} style={btnFlat}>⚙ 위젯 설정</button>
-          {showCfg&&<div style={{position:"absolute",right:0,top:"110%",zIndex:120,background:"#fff",border:`1px solid ${INK.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:"12px 14px",width:200}}>
+          {showCfg&&<div style={{position:"absolute",right:0,top:"110%",zIndex:120,background:"#fff",border:`1px solid ${INK.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,.14)",padding:"12px 14px",width:210}}>
             {WKEYS.map(([k,l])=>(<label key={k} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",fontSize:12.5,color:INK.primary,cursor:"pointer"}}>
               <input type="checkbox" checked={!!w[k]} onChange={()=>setConfig({...config,widgets:{...w,[k]:!w[k]}})} style={{accentColor:PRIMARY}}/>{l}
             </label>))}
@@ -289,6 +375,17 @@ function DashboardView({data,ym,setYm}){
           </div>))}
         </Card>}
 
+        {w.memberIncome&&<Card>
+          <CardHead title="구성원별 수입 비교"/>
+          {mStats.map(({m,s})=>(<div key={m.id} style={{marginBottom:11}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12.5}}>
+              <span style={{display:"flex",alignItems:"center",gap:6,fontWeight:600,color:INK.primary}}><ColorDot color={m.color}/>{m.name}</span>
+              <span style={{color:INK.muted,fontVariantNumeric:"tabular-nums"}}>{fmtWon(s.income)}</span>
+            </div>
+            <GaugeBar pct={s.income/maxInc*100} color={m.color}/>
+          </div>))}
+        </Card>}
+
         {w.categoryPie&&<Card>
           <CardHead title="카테고리별 지출" sub="이번 달 상위 항목"/>
           <CategoryDonut tx={tx} ym={ym} categories={categories}/>
@@ -309,16 +406,19 @@ function DashboardView({data,ym,setYm}){
         {w.accounts&&<Card>
           <CardHead title="계좌별 배분 요약" sub="상세 조정은 월배분 탭에서"/>
           {accounts.length===0&&<div style={{fontSize:12.5,color:"#cbd5e1"}}>등록된 계좌가 없습니다 — 설정에서 추가하세요</div>}
-          {accounts.map(a=>{const al=accountAlloc(tx,ym,a.id);return(
-            <div key={a.id} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid #f1f5f9`,fontSize:12.5}}>
-              <span style={{display:"flex",alignItems:"center",gap:6,color:INK.primary}}><ColorDot color={a.color||PRIMARY}/>{a.bank} {a.note?`(${a.note})`:""}</span>
+          {accounts.map(a=>{const al=accountAlloc(tx,ym,a.id);const owner=members.find(m=>m.id===a.memberId);return(
+            <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid #f1f5f9`,fontSize:12.5}}>
+              <span style={{display:"flex",flexDirection:"column",gap:1}}>
+                <span style={{display:"flex",alignItems:"center",gap:6,color:INK.primary}}><ColorDot color={a.color||PRIMARY}/>{a.bank} {a.note?`(${a.note})`:""}</span>
+                {owner&&<span style={{fontSize:10,color:INK.muted,marginLeft:14}}>{owner.name}</span>}
+              </span>
               <span style={{fontWeight:700,color:INK.primary,fontVariantNumeric:"tabular-nums"}}>{fmtWon(al.alloc)}</span>
             </div>);})}
         </Card>}
       </div>
 
       {w.budget&&budgetRows.length>0&&<Card style={{marginBottom:14}}>
-        <CardHead title="예산 진행률" sub="70% 미만 정상 · 70~100% 주의 · 초과 시 경고"/>
+        <CardHead title="예산 진행률" sub="구성원별 한도 합계 기준 · 70% 미만 정상 · 70~100% 주의 · 초과 시 경고"/>
         {budgetRows.map(r=>(<div key={r.cat.id} style={{marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12.5}}>
             <span style={{display:"flex",alignItems:"center",gap:6,color:INK.primary,fontWeight:600}}>
@@ -332,9 +432,87 @@ function DashboardView({data,ym,setYm}){
       </Card>}
 
       {w.trend&&<Card>
-        <CardHead title="6개월 수입·지출 추이"/>
-        <TrendChart tx={tx} ym={ym}/>
+        <CardHead title="수입·지출 추이" right={
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            {[6,12,24].map(n=>(<button key={n} onClick={()=>setTrendMonths(n)} style={trendMonths===n?btnTint:btnFlat}>{n}개월</button>))}
+            <input type="month" value={trendEndYm} max={currentYm()} onChange={e=>setTrendEndYm(e.target.value||currentYm())} style={{...inputSt,width:132}}/>
+          </div>}/>
+        <TrendChart tx={tx} endYm={trendEndYm} months={trendMonths}/>
       </Card>}
+    </div>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 캘린더 뷰 — 내역과 연동, 날짜별 수입·지출 합계 표시
+// ══════════════════════════════════════════════════════════════════
+
+function CalendarView({data}){
+  const {tx,members,categories}=data;
+  const now=new Date();
+  const [ref,setRef]=useState({y:now.getFullYear(),m:now.getMonth()});
+  const [selDay,setSelDay]=useState(null);
+  const weeks=useMemo(()=>buildMonthWeeks(ref.y,ref.m),[ref]);
+  const today_=todayStr();
+  const wd=["일","월","화","수","목","금","토"];
+  const move=n=>{const d=new Date(ref.y,ref.m+n,1);setRef({y:d.getFullYear(),m:d.getMonth()});setSelDay(null);};
+
+  return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
+    <div style={{maxWidth:WIDE,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <button onClick={()=>move(-1)} style={btnGhost}>◀</button>
+        <span style={{fontWeight:800,fontSize:16,color:INK.primary,minWidth:110,textAlign:"center"}}>{ref.y}년 {ref.m+1}월</span>
+        <button onClick={()=>move(1)} style={btnGhost}>▶</button>
+        {(ref.y!==now.getFullYear()||ref.m!==now.getMonth())&&<button onClick={()=>{setRef({y:now.getFullYear(),m:now.getMonth()});setSelDay(null);}} style={btnTint}>이번 달</button>}
+      </div>
+      <Card>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",borderBottom:`1px solid ${INK.border}`,marginBottom:4,paddingBottom:4}}>
+          {wd.map((wname,i)=><div key={wname} style={{padding:"4px 0",textAlign:"center",fontSize:11.5,fontWeight:700,color:i===0?EXPENSE_COLOR:i===6?PRIMARY:INK.muted}}>{wname}</div>)}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+          {weeks.flat().map((d,i)=>{
+            const inM=d.getMonth()===ref.m; const ds=fmtDate(d); const isToday=ds===today_;
+            const {income,expense}=dailyTotals(tx,ds);
+            const has=income>0||expense>0;
+            return(<div key={i} onClick={()=>inM&&setSelDay(ds)}
+              style={{minHeight:64,padding:"5px 4px",borderRadius:8,cursor:inM?"pointer":"default",
+                background:isToday?BG.tint:"#fff",border:`1px solid ${isToday?BG.tintBorder:"#f1f5f9"}`,opacity:inM?1:0.35}}>
+              <div style={{fontSize:11,fontWeight:isToday?800:600,color:isToday?PRIMARY:INK.secondary,marginBottom:3}}>{d.getDate()}</div>
+              {has&&<div style={{display:"flex",flexDirection:"column",gap:1}}>
+                {income>0&&<div style={{fontSize:9.5,fontWeight:700,color:INCOME_COLOR}}>+{fmtNum(income)}</div>}
+                {expense>0&&<div style={{fontSize:9.5,fontWeight:700,color:EXPENSE_COLOR}}>-{fmtNum(expense)}</div>}
+              </div>}
+            </div>);
+          })}
+        </div>
+        <div style={{fontSize:10.5,color:INK.muted,marginTop:10}}>· 각 날짜 칸은 그날 하루의 수입·지출 합계입니다. 날짜를 클릭하면 그날의 거래 목록을 볼 수 있습니다.</div>
+      </Card>
+      {selDay&&<CalendarDayPanel ds={selDay} tx={tx.filter(t=>t.date===selDay)} members={members} categories={categories} onClose={()=>setSelDay(null)}/>}
+    </div>
+  </div>);
+}
+
+function CalendarDayPanel({ds,tx,members,categories,onClose}){
+  const income=sumBy(tx,t=>t.type==="income");
+  const expense=sumBy(tx,t=>t.type==="expense");
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}} onClick={onClose}>
+    <div style={{background:"#fff",borderRadius:14,padding:20,width:440,maxWidth:"90vw",maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 32px rgba(0,0,0,.2)"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={{fontWeight:800,fontSize:14,color:INK.primary}}>📅 {ds}</span>
+        <span onClick={onClose} style={{cursor:"pointer",color:INK.muted}}>✕</span>
+      </div>
+      <div style={{display:"flex",gap:14,marginBottom:12,fontSize:12.5}}>
+        <span style={{color:INCOME_COLOR,fontWeight:700}}>수입 {fmtWon(income)}</span>
+        <span style={{color:EXPENSE_COLOR,fontWeight:700}}>지출 {fmtWon(expense)}</span>
+      </div>
+      {tx.length===0&&<div style={{fontSize:12.5,color:"#cbd5e1"}}>이 날짜의 거래가 없습니다</div>}
+      {tx.map(t=>{const mem=members.find(m=>m.id===t.memberId);const cat=categories.find(c=>c.id===t.categoryId);
+        return(<div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 2px",borderBottom:"1px solid #f1f5f9",fontSize:12.5}}>
+          {mem&&<ColorDot color={mem.color}/>}<span style={{color:INK.secondary,width:56,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{mem?.name||"-"}</span>
+          {cat&&<span style={{color:INK.secondary,width:64,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cat.name}</span>}
+          <span style={{flex:1,color:INK.primary,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.desc}</span>
+          <span style={{fontWeight:700,color:t.type==="income"?INCOME_COLOR:EXPENSE_COLOR,flexShrink:0}}>{t.type==="income"?"+":"-"}{fmtWon(t.amount)}</span>
+        </div>);})}
     </div>
   </div>);
 }
@@ -361,60 +539,66 @@ function TxView({data,ym,setYm}){
     .filter(t=>fType==="전체"||(fType==="수입"?t.type==="income":fType==="변동"?t.kind==="variable":fType==="고정"?t.kind==="fixed":true))
     .sort((a,b)=>b.date.localeCompare(a.date)),[tx,ym,fMember,fCat,fType]);
 
+  const sumIncome=sumBy(rows,t=>t.type==="income");
+  const sumExpense=sumBy(rows,t=>t.type==="expense");
+  const diff=sumIncome-sumExpense;
+
   const submit=()=>{
     if(!form.memberId||!form.desc.trim()||!Number(form.amount)) return;
     const rec={...form,ym:form.date.slice(0,7),amount:Number(form.amount),
+      categoryId:form.type==="income"?"":form.categoryId,
       kind:form.type==="income"?undefined:(form.kind||"variable"), // 수정 시 기존 kind(변동/고정) 보존 — 신규 입력만 변동으로 기본값
       id:editId||("tx_"+uid()),createdAt:editId?tx.find(t=>t.id===editId)?.createdAt:nowIso()};
     if(editId){ setTx(tx.map(t=>t.id===editId?rec:t)); } else { setTx([...tx,rec]); }
     setForm(emptyTxForm()); setEditId(null);
   };
-  const startEdit=t=>{setForm({...t,amount:String(t.amount)});setEditId(t.id);};
-  const del=id=>{if(!confirm("삭제하시겠습니까?"))return;setTx(tx.filter(t=>t.id!==id));if(editId===id){setForm(emptyTxForm());setEditId(null);}};
+  const cancelEdit=()=>{setForm(emptyTxForm());setEditId(null);};
+  const startEdit=t=>{setForm({...t});setEditId(t.id);};
+  const del=id=>{if(!confirm("삭제하시겠습니까?"))return;setTx(tx.filter(t=>t.id!==id));if(editId===id){cancelEdit();}};
 
-  const exportExcel=()=>{
-    const head=["날짜","구분","지출자","카테고리","내용","금액","계좌","메모"];
-    const aoa=[head,...rows.map(t=>[t.date,t.type==="income"?"수입":(t.kind==="fixed"?"고정지출":"변동지출"),
-      members.find(m=>m.id===t.memberId)?.name||"",categories.find(c=>c.id===t.categoryId)?.name||"",
-      t.desc,t.amount,accounts.find(a=>a.id===t.payAccountId)?.bank||"",t.memo||""])];
-    const ws=XLSX.utils.aoa_to_sheet(aoa);
-    head.forEach((_,i)=>{const cell=ws[XLSX.utils.encode_cell({r:0,c:i})];if(cell)cell.s={font:{bold:true,color:{rgb:"FFFFFF"}},fill:{fgColor:{rgb:"2A78D6"}}};});
-    ws["!cols"]=head.map(()=>({wch:14}));
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,ws,ymLabel(ym));
-    XLSX.writeFile(wb,`가계부_${ym}.xlsx`);
-  };
-
-  return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
+  return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
     <div style={{maxWidth:WIDE,margin:"0 auto"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
-        <MonthPicker ym={ym} setYm={setYm}/>
-        <button onClick={exportExcel} style={btnFlat}>⇩ 엑셀 내보내기</button>
-      </div>
+      <div style={{marginBottom:14}}><MonthPicker ym={ym} setYm={setYm}/></div>
 
       <Card style={{marginBottom:14}}>
         <CardHead title={editId?"거래 수정":"거래 추가"} sub="지출은 기본적으로 변동지출로 기록됩니다 (고정지출은 설정 탭에서 템플릿으로 관리)"/>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8}}>
-          <select style={inputSt} value={form.type} onChange={e=>setForm({...form,type:e.target.value,categoryId:e.target.value==="income"?"":form.categoryId})}>
-            <option value="expense">지출</option><option value="income">수입</option>
-          </select>
-          <input type="date" style={inputSt} value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
-          <select style={inputSt} value={form.memberId} onChange={e=>setForm({...form,memberId:e.target.value})}>
-            <option value="">지출자 선택</option>{members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          {form.type==="expense"&&<select style={inputSt} value={form.categoryId} onChange={e=>setForm({...form,categoryId:e.target.value})}>
-            <option value="">카테고리 선택</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>}
-          <input style={inputSt} placeholder="내용" value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})}/>
-          <input type="number" style={inputSt} placeholder="금액" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})}/>
-          <select style={inputSt} value={form.payAccountId} onChange={e=>setForm({...form,payAccountId:e.target.value})}>
-            <option value="">결제계좌(선택)</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
-          </select>
-          <input style={inputSt} placeholder="메모" value={form.memo} onChange={e=>setForm({...form,memo:e.target.value})}/>
+          <Field label="구분">
+            <select style={inputSt} value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>
+              <option value="expense">지출</option><option value="income">수입</option>
+            </select>
+          </Field>
+          <Field label="일자">
+            <input type="date" style={inputSt} value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
+          </Field>
+          <Field label="구성원">
+            <select style={inputSt} value={form.memberId} onChange={e=>setForm({...form,memberId:e.target.value})}>
+              <option value="">구성원 선택</option>{members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
+          <Field label="카테고리">
+            <select style={{...inputSt,opacity:form.type==="income"?0.45:1}} disabled={form.type==="income"} value={form.categoryId} onChange={e=>setForm({...form,categoryId:e.target.value})}>
+              <option value="">카테고리 선택</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="내용">
+            <input style={inputSt} placeholder="내용" value={form.desc} onChange={e=>setForm({...form,desc:e.target.value})}/>
+          </Field>
+          <Field label="금액">
+            <MoneyInput value={form.amount} onChange={v=>setForm({...form,amount:v})}/>
+          </Field>
+          <Field label="방법">
+            <select style={inputSt} value={form.payAccountId} onChange={e=>setForm({...form,payAccountId:e.target.value})}>
+              <option value="">결제계좌(선택)</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
+            </select>
+          </Field>
+          <Field label="비고">
+            <input style={inputSt} placeholder="메모" value={form.memo} onChange={e=>setForm({...form,memo:e.target.value})}/>
+          </Field>
         </div>
-        <div style={{marginTop:10,display:"flex",gap:8}}>
+        <div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8}}>
+          {editId&&<button onClick={cancelEdit} style={btnFlat}>취소</button>}
           <button onClick={submit} style={btnPrimary}>{editId?"수정 저장":"＋ 추가"}</button>
-          {editId&&<button onClick={()=>{setForm(emptyTxForm());setEditId(null);}} style={btnFlat}>취소</button>}
         </div>
       </Card>
 
@@ -431,20 +615,52 @@ function TxView({data,ym,setYm}){
       </div>
 
       <Card>
-        {rows.length===0&&<div style={{fontSize:12.5,color:"#cbd5e1",padding:"8px 0"}}>내역이 없습니다</div>}
-        {rows.map(t=>{const cat=categories.find(c=>c.id===t.categoryId);const mem=members.find(m=>m.id===t.memberId);
-          return(<div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 2px",borderBottom:"1px solid #f1f5f9",fontSize:12.5}}>
-            <span style={{width:78,color:INK.muted,fontVariantNumeric:"tabular-nums",flexShrink:0}}>{t.date}</span>
-            <span style={{width:56,flexShrink:0,fontSize:10.5,fontWeight:700,padding:"2px 7px",borderRadius:10,textAlign:"center",
-              background:t.type==="income"?INCOME_COLOR+"1c":t.kind==="fixed"?CAT_PALETTE[4]+"1c":EXPENSE_COLOR+"1c",
-              color:t.type==="income"?INCOME_COLOR:t.kind==="fixed"?CAT_PALETTE[4]:EXPENSE_COLOR}}>{t.type==="income"?"수입":t.kind==="fixed"?"고정":"변동"}</span>
-            <span style={{width:64,color:INK.secondary,flexShrink:0,display:"flex",alignItems:"center",gap:5}}>{mem&&<ColorDot color={mem.color}/>}{mem?.name||"-"}</span>
-            {cat&&<span style={{width:70,flexShrink:0,display:"flex",alignItems:"center",gap:5,color:INK.secondary}}><ColorDot color={cat.color}/>{cat.name}</span>}
-            <span style={{flex:1,color:INK.primary,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.desc}</span>
-            <span style={{fontWeight:700,color:t.type==="income"?INCOME_COLOR:EXPENSE_COLOR,fontVariantNumeric:"tabular-nums",minWidth:88,textAlign:"right"}}>{t.type==="income"?"+":"-"}{fmtWon(t.amount)}</span>
-            <span onClick={()=>startEdit(t)} style={{cursor:"pointer",color:INK.muted,fontSize:12,flexShrink:0}}>✎</span>
-            <span onClick={()=>del(t.id)} style={{cursor:"pointer",color:"#cbd5e1",fontSize:13,flexShrink:0}}>✕</span>
-          </div>);})}
+        <div style={hScrollSt}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,minWidth:760}}>
+          <thead><tr style={{color:INK.muted,fontSize:11,textAlign:"left"}}>
+            <th style={{padding:"4px 6px"}}>날짜</th><th style={{padding:"4px 6px"}}>구분</th><th style={{padding:"4px 6px"}}>구성원</th>
+            <th style={{padding:"4px 6px"}}>카테고리</th><th style={{padding:"4px 6px"}}>내용</th>
+            <th style={{padding:"4px 6px",textAlign:"right"}}>수입</th><th style={{padding:"4px 6px",textAlign:"right"}}>지출</th>
+            <th style={{padding:"4px 6px"}}>방법</th><th style={{padding:"4px 6px"}}>비고</th><th></th>
+          </tr></thead>
+          <tbody>
+            {rows.length===0&&<tr><td colSpan={10} style={{padding:"14px 6px",color:"#cbd5e1"}}>내역이 없습니다</td></tr>}
+            {rows.map(t=>{const cat=categories.find(c=>c.id===t.categoryId);const mem=members.find(m=>m.id===t.memberId);const acc=accounts.find(a=>a.id===t.payAccountId);
+              return(<tr key={t.id} style={{borderTop:"1px solid #f1f5f9"}}>
+                <td style={{padding:"7px 6px",color:INK.muted,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{t.date}</td>
+                <td style={{padding:"7px 6px"}}>
+                  <span style={{fontSize:10.5,fontWeight:700,padding:"2px 7px",borderRadius:10,whiteSpace:"nowrap",
+                    background:t.type==="income"?INCOME_COLOR+"1c":t.kind==="fixed"?CAT_PALETTE[4]+"1c":EXPENSE_COLOR+"1c",
+                    color:t.type==="income"?INCOME_COLOR:t.kind==="fixed"?CAT_PALETTE[4]:EXPENSE_COLOR}}>{t.type==="income"?"수입":t.kind==="fixed"?"고정":"변동"}</span>
+                </td>
+                <td style={{padding:"7px 6px",color:INK.secondary,whiteSpace:"nowrap"}}>{mem&&<span style={{display:"flex",alignItems:"center",gap:5}}><ColorDot color={mem.color}/>{mem.name}</span>}</td>
+                <td style={{padding:"7px 6px",color:INK.secondary,whiteSpace:"nowrap"}}>{cat&&<span style={{display:"flex",alignItems:"center",gap:5}}><ColorDot color={cat.color}/>{cat.name}</span>}</td>
+                <td style={{padding:"7px 6px",color:INK.primary,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.desc}</td>
+                <td style={{padding:"7px 6px",textAlign:"right",color:INCOME_COLOR,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>{t.type==="income"?fmtWon(t.amount):""}</td>
+                <td style={{padding:"7px 6px",textAlign:"right",color:EXPENSE_COLOR,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>{t.type==="expense"?fmtWon(t.amount):""}</td>
+                <td style={{padding:"7px 6px",color:INK.secondary,whiteSpace:"nowrap"}}>{acc?.bank||""}</td>
+                <td style={{padding:"7px 6px",color:INK.secondary,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.memo||""}</td>
+                <td style={{padding:"7px 6px",whiteSpace:"nowrap"}}>
+                  <span onClick={()=>startEdit(t)} style={{cursor:"pointer",color:INK.muted,fontSize:12,marginRight:8}}>✎</span>
+                  <span onClick={()=>del(t.id)} style={{cursor:"pointer",color:"#cbd5e1",fontSize:13}}>✕</span>
+                </td>
+              </tr>);})}
+          </tbody>
+          <tfoot>
+            <tr style={{borderTop:`2px solid ${INK.border}`,fontWeight:800}}>
+              <td colSpan={5} style={{padding:"8px 6px",color:INK.primary}}>합계</td>
+              <td style={{padding:"8px 6px",textAlign:"right",color:INCOME_COLOR,fontVariantNumeric:"tabular-nums"}}>{fmtWon(sumIncome)}</td>
+              <td style={{padding:"8px 6px",textAlign:"right",color:EXPENSE_COLOR,fontVariantNumeric:"tabular-nums"}}>{fmtWon(sumExpense)}</td>
+              <td colSpan={3}></td>
+            </tr>
+            <tr style={{fontWeight:800}}>
+              <td colSpan={5} style={{padding:"4px 6px",color:INK.primary}}>차액</td>
+              <td colSpan={2} style={{padding:"4px 6px",textAlign:"right",color:diff>=0?STATUS.good:STATUS.critical,fontVariantNumeric:"tabular-nums"}}>{fmtWon(diff)}</td>
+              <td colSpan={3}></td>
+            </tr>
+          </tfoot>
+        </table>
+        </div>
       </Card>
     </div>
   </div>);
@@ -452,6 +668,8 @@ function TxView({data,ym,setYm}){
 
 // ══════════════════════════════════════════════════════════════════
 // 월배분 뷰 — 핵심 기능
+// 계좌별 배분: "어느 계좌에서 실제로 출금됐는지"가 아니라 "어느 계좌 몫으로 귀속되는지"만 계산한다.
+// 납부액=변동지출 귀속액, 자동 배분액=고정지출 귀속액
 // ══════════════════════════════════════════════════════════════════
 
 function AllocView({data,ym,setYm}){
@@ -461,28 +679,39 @@ function AllocView({data,ym,setYm}){
   const totalExp=sumBy(txInYm(tx,ym),t=>t.type==="expense");
   const monthAdj=allocAdjust[ym]||{};
 
-  const setAdj=(accountId,val)=>{
-    const next={...allocAdjust,[ym]:{...monthAdj,[accountId]:val===""?undefined:Number(val)}};
+  // 조정 항목은 {amount, note} 형태 — 금액을 비워도 사유(note)만 남겨둘 수 있도록 항상 객체로 유지
+  const setAdjAmount=(accountId,val)=>{
+    const cur=monthAdj[accountId]||{};
+    const amount=(val===""||val===null||val===undefined)?undefined:Number(val);
+    const next={...allocAdjust,[ym]:{...monthAdj,[accountId]:{...cur,amount}}};
+    setAllocAdjust(next);
+  };
+  const setAdjNote=(accountId,note)=>{
+    const cur=monthAdj[accountId]||{};
+    const next={...allocAdjust,[ym]:{...monthAdj,[accountId]:{...cur,note}}};
     setAllocAdjust(next);
   };
 
   let totalAllocEffective=0;
   const accRows=accounts.map(a=>{
     const al=accountAlloc(tx,ym,a.id);
-    const adj=monthAdj[a.id];
-    const effective=(adj===undefined||adj===null)?al.alloc:adj;
+    const base=al.variableAlloc+al.fixedAlloc;
+    const adjEntry=monthAdj[a.id]||{};
+    const adjAmount=adjEntry.amount;
+    const effective=(adjAmount===undefined||adjAmount===null)?base:adjAmount;
     totalAllocEffective+=effective;
-    return {a,...al,adj,effective};
+    const owner=members.find(m=>m.id===a.memberId);
+    return {a,owner,...al,base,adjAmount,note:adjEntry.note||"",effective};
   });
   const diff=totalExp-totalAllocEffective;
 
-  return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
+  return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
     <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{marginBottom:14}}><MonthPicker ym={ym} setYm={setYm}/></div>
 
       <Card style={{marginBottom:14}}>
         <CardHead title="월 지출 결산" sub="구성원별 수입·변동지출·고정지출·잔액"/>
-        <div style={{overflowX:"auto"}}>
+        <div style={hScrollSt}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,minWidth:520}}>
           <thead><tr style={{textAlign:"right",color:INK.muted,fontSize:11}}>
             <th style={{textAlign:"left",padding:"4px 6px"}}>구성원</th>
@@ -511,35 +740,37 @@ function AllocView({data,ym,setYm}){
       </Card>
 
       <Card>
-        <CardHead title="계좌별 배분 금액" sub="납부액=실제 결제계좌 출금 합계 · 배분액=귀속계좌 기준 합계(직접 조정 가능)"/>
+        <CardHead title="계좌별 배분 금액" sub="납부액=변동지출 귀속액 · 자동 배분액=고정지출 귀속액 (실제 출금 계좌가 아니라 귀속 계좌 기준으로 계산됩니다)"/>
         {accounts.length===0&&<div style={{fontSize:12.5,color:"#cbd5e1"}}>등록된 계좌가 없습니다 — 설정에서 추가하세요</div>}
-        {accounts.length>0&&<div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,minWidth:520}}>
+        {accounts.length>0&&<div style={hScrollSt}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,minWidth:680}}>
           <thead><tr style={{textAlign:"right",color:INK.muted,fontSize:11}}>
             <th style={{textAlign:"left",padding:"4px 6px"}}>계좌</th>
             <th style={{padding:"4px 6px"}}>납부액</th><th style={{padding:"4px 6px"}}>자동 배분액</th>
-            <th style={{padding:"4px 6px"}}>조정값</th><th style={{padding:"4px 6px"}}>최종 배분액</th>
+            <th style={{padding:"4px 6px"}}>조정값</th><th style={{padding:"4px 6px",textAlign:"left"}}>비고</th><th style={{padding:"4px 6px"}}>최종 배분액</th>
           </tr></thead>
           <tbody>
             {accRows.map(r=>(<tr key={r.a.id} style={{borderTop:"1px solid #f1f5f9"}}>
-              <td style={{padding:"7px 6px",display:"flex",alignItems:"center",gap:6,color:INK.primary}}>
-                <ColorDot color={r.a.color||PRIMARY}/>{r.a.bank}{r.a.note?` (${r.a.note})`:""}
+              <td style={{padding:"7px 6px",color:INK.primary}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}><ColorDot color={r.a.color||PRIMARY}/>{r.a.bank}{r.a.note?` (${r.a.note})`:""}</div>
+                {r.owner&&<div style={{fontSize:10,color:INK.muted,marginLeft:14}}>{r.owner.name}</div>}
               </td>
-              <td style={{padding:"7px 6px",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmtNum(r.paid)}</td>
-              <td style={{padding:"7px 6px",textAlign:"right",fontVariantNumeric:"tabular-nums",color:INK.muted}}>{fmtNum(r.alloc)}</td>
-              <td style={{padding:"5px 6px",textAlign:"right"}}>
-                <input type="number" placeholder="-" value={r.adj===undefined||r.adj===null?"":r.adj}
-                  onChange={e=>setAdj(r.a.id,e.target.value)}
-                  style={{...inputSt,width:100,textAlign:"right",padding:"5px 8px"}}/>
+              <td style={{padding:"7px 6px",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmtNum(r.variableAlloc)}</td>
+              <td style={{padding:"7px 6px",textAlign:"right",fontVariantNumeric:"tabular-nums",color:INK.muted}}>{fmtNum(r.fixedAlloc)}</td>
+              <td style={{padding:"5px 6px",width:130}}>
+                <MoneyInput value={r.adjAmount===undefined||r.adjAmount===null?"":r.adjAmount} onChange={v=>setAdjAmount(r.a.id,v)}/>
+              </td>
+              <td style={{padding:"5px 6px",width:150}}>
+                <input style={inputSt} placeholder="조정 사유" value={r.note} onChange={e=>setAdjNote(r.a.id,e.target.value)}/>
               </td>
               <td style={{padding:"7px 6px",textAlign:"right",fontWeight:800,color:INK.primary,fontVariantNumeric:"tabular-nums"}}>
-                {fmtNum(r.effective)}{r.adj!==undefined&&r.adj!==null&&<span style={{fontSize:10,fontWeight:600,color:PRIMARY,marginLeft:4}}>(조정됨)</span>}
+                {fmtNum(r.effective)}{r.adjAmount!==undefined&&r.adjAmount!==null&&<span style={{fontSize:10,fontWeight:600,color:PRIMARY,marginLeft:4}}>(조정됨)</span>}
               </td>
             </tr>))}
           </tbody>
         </table>
         </div>}
-        <div style={{marginTop:12,padding:"10px 12px",borderRadius:10,background:Math.abs(diff)<1?"#f0fdf4":"#fef2f2",display:"flex",justifyContent:"space-between",fontSize:12.5}}>
+        <div style={{marginTop:12,padding:"10px 12px",borderRadius:10,background:Math.abs(diff)<1?"#f0fdf4":"#fef2f2",display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:12.5}}>
           <span style={{color:INK.secondary}}>검산 — 총지출 {fmtWon(totalExp)} vs 배분합계 {fmtWon(totalAllocEffective)}</span>
           <span style={{fontWeight:800,color:Math.abs(diff)<1?STATUS.good:STATUS.critical}}>{Math.abs(diff)<1?"일치 ✓":`차이 ${fmtWon(diff)}`}</span>
         </div>
@@ -549,29 +780,70 @@ function AllocView({data,ym,setYm}){
 }
 
 // ══════════════════════════════════════════════════════════════════
-// 설정 뷰 — 구성원·계좌·카테고리·예산·고정지출 템플릿·백업
+// 설정 뷰 — 구성원·계좌·카테고리·예산·고정지출 템플릿·엑셀 내보내기
 // ══════════════════════════════════════════════════════════════════
 
 function SettingsView({data}){
-  const {members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,toast}=data;
+  const {members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,toast,refreshTxAndFixed,tx}=data;
   const [section,setSection]=useState("members");
-  const SECS=[["members","구성원"],["accounts","계좌"],["categories","카테고리"],["budgets","예산"],["fixed","고정지출 템플릿"],["backup","백업"]];
+  const [expSel,setExpSel]=useState({tx:true,fixed:true,categories:false,accounts:false,budgets:false});
+  const SECS=[["members","구성원"],["accounts","계좌"],["categories","카테고리"],["budgets","예산"],["fixed","고정지출 템플릿"],["export","엑셀 내보내기"]];
 
   const addMember=()=>setMembers([...members,{id:"m_"+uid(),name:"새 구성원",color:CAT_PALETTE[members.length%8]}]);
   const addAccount=()=>setAccounts([...accounts,{id:"a_"+uid(),memberId:members[0]?.id||"",bank:"",note:"",color:CAT_PALETTE[accounts.length%8]}]);
   const addCategory=()=>setCategories([...categories,{id:"c_"+uid(),name:"새 카테고리",desc:"",color:CAT_PALETTE_EXT[categories.length%10],preset:false}]);
-  const addFixed=()=>setFixedTemplates([...fixedTemplates,{id:"f_"+uid(),name:"",categoryId:categories[0]?.id||"",memberId:members[0]?.id||"",payAccountId:"",allocAccountId:"",dueDay:15,amount:0,active:true,lastGeneratedYm:"",memo:""}]);
+  const addFixed=()=>setFixedTemplates([...fixedTemplates,{id:"f_"+uid(),name:"",categoryId:categories[0]?.id||"",memberId:members[0]?.id||"",payAccountId:"",allocAccountId:"",dueDay:15,amount:"",active:true,lastGeneratedYm:"",memo:""}]);
+  const updFixed=(id,patch)=>setFixedTemplates(fixedTemplates.map(x=>x.id===id?{...x,...patch}:x));
 
   const runGenerate=async()=>{
-    try{ const r=await generateFixedTxReq(); toast(`고정지출 생성 완료 — 신규 ${r.created}건`); }
-    catch(e){ toast("생성 실패: "+e.message); }
-  };
-  const runBackup=async()=>{
-    try{ await backupNowReq(); toast("백업 완료 — GDrive에 사본이 저장되었습니다"); }
-    catch(e){ toast("백업 실패: "+e.message); }
+    try{
+      const r=await generateFixedTxReq();
+      await refreshTxAndFixed(); // 백엔드가 반영한 최신 거래·템플릿을 즉시 재조회(30초 폴링을 기다리지 않고 바로 내역·월배분·대시보드에 반영)
+      toast(`고정지출 생성 완료 — 신규 ${r.created}건`);
+    }catch(e){ toast("생성 실패: "+e.message); }
   };
 
-  return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
+  const styleHeader=(ws,head)=>{head.forEach((_,i)=>{const cell=ws[XLSX.utils.encode_cell({r:0,c:i})];if(cell)cell.s={font:{bold:true,color:{rgb:"FFFFFF"}},fill:{fgColor:{rgb:"2A78D6"}}};});ws["!cols"]=head.map(()=>({wch:14}));};
+  const runExport=()=>{
+    const wb=XLSX.utils.book_new();
+    if(expSel.tx){
+      const head=["날짜","구분","구성원","카테고리","내용","수입","지출","계좌","메모"];
+      const aoa=[head,...tx.slice().sort((a,b)=>a.date.localeCompare(b.date)).map(t=>[t.date,t.type==="income"?"수입":(t.kind==="fixed"?"고정지출":"변동지출"),
+        members.find(m=>m.id===t.memberId)?.name||"",categories.find(c=>c.id===t.categoryId)?.name||"",t.desc||"",
+        t.type==="income"?t.amount:"",t.type==="expense"?t.amount:"",accounts.find(a=>a.id===t.payAccountId)?.bank||"",t.memo||""])];
+      const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
+      XLSX.utils.book_append_sheet(wb,ws,"거래내역");
+    }
+    if(expSel.fixed){
+      const head=["이름","카테고리","구성원","납부계좌","배분계좌","납부일","금액","활성화","메모"];
+      const aoa=[head,...fixedTemplates.map(f=>[f.name,categories.find(c=>c.id===f.categoryId)?.name||"",members.find(m=>m.id===f.memberId)?.name||"",
+        accounts.find(a=>a.id===f.payAccountId)?.bank||"",accounts.find(a=>a.id===f.allocAccountId)?.bank||"",f.dueDay,f.amount,f.active?"Y":"N",f.memo||""])];
+      const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
+      XLSX.utils.book_append_sheet(wb,ws,"고정지출템플릿");
+    }
+    if(expSel.categories){
+      const head=["이름","설명"];
+      const aoa=[head,...categories.map(c=>[c.name,c.desc||""])];
+      const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
+      XLSX.utils.book_append_sheet(wb,ws,"카테고리");
+    }
+    if(expSel.accounts){
+      const head=["구성원","은행","비고"];
+      const aoa=[head,...accounts.map(a=>[members.find(m=>m.id===a.memberId)?.name||"",a.bank,a.note||""])];
+      const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
+      XLSX.utils.book_append_sheet(wb,ws,"계좌");
+    }
+    if(expSel.budgets){
+      const head=["카테고리","구성원","한도"];
+      const aoa=[head,...budgets.filter(b=>Number(b.limit)>0).map(b=>[categories.find(c=>c.id===b.categoryId)?.name||"",members.find(m=>m.id===b.memberId)?.name||"",b.limit])];
+      const ws=XLSX.utils.aoa_to_sheet(aoa); styleHeader(ws,head);
+      XLSX.utils.book_append_sheet(wb,ws,"예산");
+    }
+    if(wb.SheetNames.length===0){ toast("내보낼 시트를 하나 이상 선택하세요"); return; }
+    XLSX.writeFile(wb,`가계부_전체_${todayStr()}.xlsx`);
+  };
+
+  return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
     <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
         {SECS.map(([k,l])=>(<button key={k} onClick={()=>setSection(k)}
@@ -589,8 +861,9 @@ function SettingsView({data}){
       </Card>}
 
       {section==="accounts"&&<Card>
-        <CardHead title="계좌" sub="구성원별 은행·계좌 — 지출 입력 시 결제계좌·고정지출 배분계좌로 사용" right={<button onClick={addAccount} style={btnFlat}>＋ 추가</button>}/>
-        {accounts.map(a=>(<div key={a.id} style={{display:"grid",gridTemplateColumns:"32px 100px 1fr 1fr auto",gap:8,alignItems:"center",marginBottom:8}}>
+        <CardHead title="계좌" sub="구성원별 은행·계좌 — 지출 입력 시 결제계좌·고정지출 배분계좌로 사용. ▲▼로 표시 순서 변경" right={<button onClick={addAccount} style={btnFlat}>＋ 추가</button>}/>
+        {accounts.map((a,idx)=>(<div key={a.id} style={{display:"grid",gridTemplateColumns:"auto 32px 100px 1fr 1fr auto",gap:8,alignItems:"center",marginBottom:8}}>
+          <ReorderBtns onUp={()=>setAccounts(moveItem(accounts,idx,-1))} onDown={()=>setAccounts(moveItem(accounts,idx,1))} disabledUp={idx===0} disabledDown={idx===accounts.length-1}/>
           <input type="color" value={a.color||PRIMARY} onChange={e=>setAccounts(accounts.map(x=>x.id===a.id?{...x,color:e.target.value}:x))} style={{width:32,height:32,border:"none",borderRadius:8,cursor:"pointer"}}/>
           <select style={inputSt} value={a.memberId} onChange={e=>setAccounts(accounts.map(x=>x.id===a.id?{...x,memberId:e.target.value}:x))}>
             {members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
@@ -612,51 +885,71 @@ function SettingsView({data}){
       </Card>}
 
       {section==="budgets"&&<Card>
-        <CardHead title="카테고리별 월 예산" sub="한도를 넘으면 대시보드에 경고가 표시됩니다"/>
-        {categories.map(c=>{const b=budgets.find(x=>x.categoryId===c.id)||{categoryId:c.id,limit:0};
-          return(<div key={c.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-            <span style={{width:120,display:"flex",alignItems:"center",gap:6,fontSize:12.5,color:INK.primary}}><ColorDot color={c.color}/>{c.name}</span>
-            <input type="number" style={{...inputSt,width:150}} value={b.limit||""} placeholder="0"
-              onChange={e=>{const v=Number(e.target.value)||0;const exists=budgets.some(x=>x.categoryId===c.id);
-                setBudgets(exists?budgets.map(x=>x.categoryId===c.id?{...x,limit:v}:x):[...budgets,{categoryId:c.id,limit:v}]);}}/>
-            <span style={{fontSize:11.5,color:INK.muted}}>원 / 월</span>
-          </div>);})}
+        <CardHead title="카테고리별 월 예산" sub="구성원별로 한도를 지정하면 카테고리 합계가 자동 계산됩니다 (대시보드 예산 진행률에 사용)"/>
+        {categories.map(c=>{
+          const catBudgets=members.map(m=>budgets.find(b=>b.categoryId===c.id&&b.memberId===m.id)||{categoryId:c.id,memberId:m.id,limit:""});
+          const total=catBudgets.reduce((s,b)=>s+(Number(b.limit)||0),0);
+          const updBudget=(memberId,v)=>{
+            const exists=budgets.some(b=>b.categoryId===c.id&&b.memberId===memberId);
+            setBudgets(exists?budgets.map(b=>(b.categoryId===c.id&&b.memberId===memberId)?{...b,limit:v}:b):[...budgets,{categoryId:c.id,memberId,limit:v}]);
+          };
+          return(<div key={c.id} style={{borderBottom:"1px solid #f1f5f9",padding:"10px 0"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,fontSize:12.5,fontWeight:700,color:INK.primary}}>
+              <ColorDot color={c.color}/>{c.name}
+              <span style={{marginLeft:"auto",fontSize:12,fontWeight:800,color:PRIMARY}}>합계 {fmtWon(total)}</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:`repeat(auto-fit,minmax(140px,1fr))`,gap:8}}>
+              {members.map((m,i)=>(<Field key={m.id} label={m.name}>
+                <MoneyInput value={catBudgets[i].limit} onChange={v=>updBudget(m.id,v)}/>
+              </Field>))}
+            </div>
+          </div>);
+        })}
       </Card>}
 
       {section==="fixed"&&<Card>
-        <CardHead title="고정지출 템플릿" sub="매달 납부일이 되면 자동으로 거래내역에 생성됩니다 (납부방법=실제 출금계좌 / 배분방법=비용 귀속계좌)"
+        <CardHead title="고정지출 템플릿" sub="매달 납부일이 되면 자동으로 거래내역에 생성됩니다. 납부계좌=결제(출금) 계좌 · 배분계좌=비용이 귀속되는 계좌(월배분 탭 집계 기준). ▲▼로 순서 변경, 좌측 색상 띠는 구성원 색상"
           right={<div style={{display:"flex",gap:6}}><button onClick={runGenerate} style={btnFlat}>지금 생성 실행</button><button onClick={addFixed} style={btnFlat}>＋ 추가</button></div>}/>
-        {fixedTemplates.map(f=>(<div key={f.id} style={{border:`1px solid ${INK.border}`,borderRadius:10,padding:10,marginBottom:8}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
-            <input style={inputSt} placeholder="이름(예: 보험료)" value={f.name} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,name:e.target.value}:x))}/>
-            <select style={inputSt} value={f.categoryId} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,categoryId:e.target.value}:x))}>
-              {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <select style={inputSt} value={f.memberId} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,memberId:e.target.value}:x))}>
-              {members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 90px 1fr auto",gap:8,alignItems:"center"}}>
-            <select style={inputSt} value={f.payAccountId} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,payAccountId:e.target.value}:x))}>
-              <option value="">납부계좌(출금)</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
-            </select>
-            <select style={inputSt} value={f.allocAccountId} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,allocAccountId:e.target.value}:x))}>
-              <option value="">배분계좌(귀속)</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
-            </select>
-            <input type="number" min="1" max="31" style={inputSt} placeholder="납부일" value={f.dueDay} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,dueDay:e.target.value}:x))}/>
-            <input type="number" style={inputSt} placeholder="금액" value={f.amount} onChange={e=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,amount:e.target.value}:x))}/>
-            <span onClick={()=>setFixedTemplates(fixedTemplates.filter(x=>x.id!==f.id))} style={{cursor:"pointer",color:"#cbd5e1"}}>✕</span>
-          </div>
-          <label style={{display:"flex",alignItems:"center",gap:6,marginTop:6,fontSize:12,color:INK.secondary}}>
-            <input type="checkbox" checked={f.active} onChange={()=>setFixedTemplates(fixedTemplates.map(x=>x.id===f.id?{...x,active:!x.active}:x))} style={{accentColor:PRIMARY}}/>
-            활성화 (해제하면 자동생성 대상에서 제외)
-          </label>
-        </div>))}
+        {fixedTemplates.map((f,idx)=>{const owner=members.find(m=>m.id===f.memberId);
+          return(<div key={f.id} style={{display:"flex",gap:8,marginBottom:8}}>
+            <ReorderBtns onUp={()=>setFixedTemplates(moveItem(fixedTemplates,idx,-1))} onDown={()=>setFixedTemplates(moveItem(fixedTemplates,idx,1))} disabledUp={idx===0} disabledDown={idx===fixedTemplates.length-1}/>
+            <div style={{flex:1,border:`1px solid ${INK.border}`,borderLeft:`4px solid ${owner?.color||INK.border}`,borderRadius:10,padding:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:8}}>
+                <Field label="이름"><input style={inputSt} placeholder="예: 보험료" value={f.name} onChange={e=>updFixed(f.id,{name:e.target.value})}/></Field>
+                <Field label="카테고리"><select style={inputSt} value={f.categoryId} onChange={e=>updFixed(f.id,{categoryId:e.target.value})}>
+                  {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select></Field>
+                <Field label="구성원"><select style={inputSt} value={f.memberId} onChange={e=>updFixed(f.id,{memberId:e.target.value})}>
+                  {members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                </select></Field>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,alignItems:"end"}}>
+                <Field label="납부계좌(출금)"><select style={inputSt} value={f.payAccountId} onChange={e=>updFixed(f.id,{payAccountId:e.target.value})}>
+                  <option value="">선택 안 함</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
+                </select></Field>
+                <Field label="배분계좌(귀속)"><select style={inputSt} value={f.allocAccountId} onChange={e=>updFixed(f.id,{allocAccountId:e.target.value})}>
+                  <option value="">선택 안 함</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
+                </select></Field>
+                <Field label="납부일(매달)"><DayOfMonthPicker value={f.dueDay} onChange={d=>updFixed(f.id,{dueDay:d})}/></Field>
+                <Field label="금액(원)"><MoneyInput value={f.amount} onChange={v=>updFixed(f.id,{amount:v})}/></Field>
+                <span onClick={()=>setFixedTemplates(fixedTemplates.filter(x=>x.id!==f.id))} style={{cursor:"pointer",color:"#cbd5e1",alignSelf:"center",justifySelf:"end"}}>✕ 삭제</span>
+              </div>
+              <label style={{display:"flex",alignItems:"center",gap:6,marginTop:8,fontSize:12,color:INK.secondary}}>
+                <input type="checkbox" checked={f.active} onChange={()=>updFixed(f.id,{active:!f.active})} style={{accentColor:PRIMARY}}/>
+                활성화 (해제하면 자동생성 대상에서 제외)
+              </label>
+            </div>
+          </div>);})}
       </Card>}
 
-      {section==="backup"&&<Card>
-        <CardHead title="백업" sub="스프레드시트 스냅샷을 GDrive 사본으로 저장합니다 (자동: 매주 월요일, 수동: 아래 버튼)"/>
-        <button onClick={runBackup} style={btnPrimary}>지금 백업 실행</button>
+      {section==="export"&&<Card>
+        <CardHead title="엑셀 내보내기" sub="체크한 항목을 시트별로 담아 하나의 엑셀 파일로 내보냅니다"/>
+        {[["tx","거래내역"],["fixed","고정지출 템플릿"],["categories","카테고리"],["accounts","계좌"],["budgets","예산"]].map(([k,l])=>(
+          <label key={k} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",fontSize:12.5,color:INK.primary,cursor:"pointer"}}>
+            <input type="checkbox" checked={!!expSel[k]} onChange={()=>setExpSel({...expSel,[k]:!expSel[k]})} style={{accentColor:PRIMARY}}/>{l}
+          </label>
+        ))}
+        <button onClick={runExport} style={{...btnPrimary,marginTop:10}}>⇩ 선택 항목 내보내기</button>
       </Card>}
     </div>
   </div>);
@@ -672,7 +965,6 @@ function App(){
   const [tab,setTab]=useState("dash");
   const [ym,setYm]=useState(currentYm());
   const [toastMsg,setToastMsg]=useState(null);
-  const [sbOpen,setSbOpen]=useState(()=>window.innerWidth>760);
 
   const [members,setMembersRaw]=useState(DEF_MEMBERS);
   const [accounts,setAccountsRaw]=useState([]);
@@ -729,6 +1021,13 @@ function App(){
   const setAllocAdjust=makeSetter("ledger_alloc_adjust",allocAdjust,setAllocAdjustRaw);
   const setConfig=makeSetter("ledger_config",config,setConfigRaw);
 
+  // "지금 생성 실행" 등 서버측 변경 직후 즉시 반영 — 30초 폴링을 기다리지 않고 ledger_tx·ledger_fixed_templates만 재조회
+  const refreshTxAndFixed=async()=>{
+    const d=await cloudGetAll();
+    if(d.ledger_tx&&d.ledger_tx.value){ try{ setTxRaw(JSON.parse(d.ledger_tx.value)); lastSyncRef.current.ledger_tx=d.ledger_tx.updatedAt; skipSaveRef.current.add("ledger_tx"); }catch(e){} }
+    if(d.ledger_fixed_templates&&d.ledger_fixed_templates.value){ try{ setFixedTemplatesRaw(JSON.parse(d.ledger_fixed_templates.value)); lastSyncRef.current.ledger_fixed_templates=d.ledger_fixed_templates.updatedAt; skipSaveRef.current.add("ledger_fixed_templates"); }catch(e){} }
+  };
+
   // 30초 폴링 — 다른 기기의 변경사항 반영
   useEffect(()=>{
     if(!loaded) return;
@@ -755,28 +1054,29 @@ function App(){
     return ()=>clearInterval(iv);
   },[loaded,members,accounts,categories,tx,fixedTemplates,budgets,allocAdjust,config]);
 
-  const data={tx,setTx,members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,allocAdjust,setAllocAdjust,config,setConfig,toast};
+  const data={tx,setTx,members,setMembers,accounts,setAccounts,categories,setCategories,budgets,setBudgets,fixedTemplates,setFixedTemplates,allocAdjust,setAllocAdjust,config,setConfig,toast,refreshTxAndFixed};
 
-  const TABS=[["dash","📊 대시보드"],["tx","📝 내역"],["alloc","🧮 월배분"],["settings","⚙ 설정"]];
+  const TABS=[["dash","📊 대시보드"],["cal","📅 캘린더"],["tx","📝 내역"],["alloc","🧮 월배분"],["settings","⚙ 설정"]];
 
   if(!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:INK.muted,fontSize:13}}>불러오는 중...</div>;
 
   return(<div style={{display:"flex",flexDirection:"column",height:"100vh",fontFamily:"system-ui,-apple-system,'Segoe UI',sans-serif"}}>
-    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 20px",background:"#fff",borderBottom:`1px solid ${INK.border}`,flexWrap:"wrap",gap:10}}>
-      <div style={{display:"flex",alignItems:"center",gap:14}}>
-        <span style={{fontWeight:800,fontSize:16,color:INK.primary}}>💰 가계부</span>
-        <div style={{display:"flex",gap:4}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 20px",background:"#fff",borderBottom:`1px solid ${INK.border}`,gap:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,minWidth:0,flex:"1 1 auto"}}>
+        <span style={{fontWeight:800,fontSize:16,color:INK.primary,whiteSpace:"nowrap",flexShrink:0}}>💰 가계부</span>
+        <div style={{display:"flex",gap:4,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
           {TABS.map(([k,l])=>(<button key={k} onClick={()=>setTab(k)}
-            style={{padding:"7px 13px",borderRadius:9,border:"none",background:tab===k?PRIMARY:"transparent",color:tab===k?"#fff":INK.secondary,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>{l}</button>))}
+            style={{padding:"7px 12px",borderRadius:9,border:"none",background:tab===k?PRIMARY:"transparent",color:tab===k?"#fff":INK.secondary,fontSize:12.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>))}
         </div>
       </div>
-      <span style={{fontSize:11,color:cloudOk?INK.muted:STATUS.critical,display:"flex",alignItems:"center",gap:5}}>
+      <span style={{fontSize:11,color:cloudOk?INK.muted:STATUS.critical,display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
         <span style={{width:7,height:7,borderRadius:"50%",background:cloudOk?STATUS.good:STATUS.critical,display:"inline-block"}}/>
         {cloudOk?"동기화됨":"연결 끊김"}
       </span>
     </div>
 
     {tab==="dash"&&<DashboardView data={data} ym={ym} setYm={setYm}/>}
+    {tab==="cal"&&<CalendarView data={data}/>}
     {tab==="tx"&&<TxView data={data} ym={ym} setYm={setYm}/>}
     {tab==="alloc"&&<AllocView data={data} ym={ym} setYm={setYm}/>}
     {tab==="settings"&&<SettingsView data={data}/>}
