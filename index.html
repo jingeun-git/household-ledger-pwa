@@ -61,6 +61,7 @@ const INK={primary:"#1e293b",secondary:"#475569",muted:"#94a3b8",border:"#e2e8f0
 const BG={page:"#f8fafc",card:"#ffffff",tint:"#eff6ff",tintBorder:"#bfdbfe"};
 const EXPENSE_COLOR="#e34948", INCOME_COLOR="#1baf7a", PRIMARY="#2a78d6";
 const MUTED_SLOT="#a8a29e"; // "기타" 집계 버킷 전용 (실제 카테고리 색과 혼동되지 않도록)
+const WIDE="min(1560px, 92vw)"; // 각 탭 콘텐츠 컨테이너 폭 — 와이드 모니터에서도 자연스럽게 채워지도록 뷰포트 기준 가변폭(고정 1040px 대비 확장)
 
 const uid=()=>Math.random().toString(36).slice(2,9);
 const nowIso=()=>new Date().toISOString();
@@ -257,7 +258,7 @@ function DashboardView({data,ym,setYm}){
   const WKEYS=[["kpi","수입·지출 요약"],["memberCompare","구성원별 비교"],["categoryPie","카테고리 도넛차트"],["fixedVsVariable","고정↔변동 비율"],["trend","6개월 추이"],["budget","예산 진행률"],["accounts","계좌별 배분 요약"]];
 
   return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
-    <div style={{maxWidth:1040,margin:"0 auto"}}>
+    <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
         <MonthPicker ym={ym} setYm={setYm}/>
         <div style={{position:"relative"}}>
@@ -385,7 +386,7 @@ function TxView({data,ym,setYm}){
   };
 
   return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
-    <div style={{maxWidth:1040,margin:"0 auto"}}>
+    <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
         <MonthPicker ym={ym} setYm={setYm}/>
         <button onClick={exportExcel} style={btnFlat}>⇩ 엑셀 내보내기</button>
@@ -476,7 +477,7 @@ function AllocView({data,ym,setYm}){
   const diff=totalExp-totalAllocEffective;
 
   return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
-    <div style={{maxWidth:1040,margin:"0 auto"}}>
+    <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{marginBottom:14}}><MonthPicker ym={ym} setYm={setYm}/></div>
 
       <Card style={{marginBottom:14}}>
@@ -571,7 +572,7 @@ function SettingsView({data}){
   };
 
   return(<div style={{flex:1,overflowY:"auto",padding:"18px 20px"}}>
-    <div style={{maxWidth:1040,margin:"0 auto"}}>
+    <div style={{maxWidth:WIDE,margin:"0 auto"}}>
       <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
         {SECS.map(([k,l])=>(<button key={k} onClick={()=>setSection(k)}
           style={{padding:"7px 13px",borderRadius:9,border:`1px solid ${section===k?BG.tintBorder:INK.border}`,
