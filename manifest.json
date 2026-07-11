@@ -1,0 +1,15 @@
+{
+  "name": "가계부",
+  "short_name": "가계부",
+  "description": "부부 공동가계부 — 지출·수입 관리, 월배분, 대시보드 (데스크탑·모바일 동기화)",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f8fafc",
+  "theme_color": "#2a78d6",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
