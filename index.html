@@ -928,10 +928,27 @@ function SettingsView({data}){
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
           {members.map(m=>{
             const nowYm=currentYm();
-            const total=fixedTemplates.filter(f=>f.memberId===m.id&&f.startYm&&f.startYm<=nowYm&&(!f.endYm||f.endYm>=nowYm)).reduce((s,f)=>s+(Number(f.amount)||0),0);
-            return(<div key={m.id} style={{flex:1,minWidth:140,background:BG.card,border:`1px solid ${INK.border}`,borderLeft:`4px solid ${m.color}`,borderRadius:10,padding:"10px 12px"}}>
+            // 적용기간(startYm~endYm) 밖인 템플릿은 합계·계좌별 세부합계 모두에서 제외 — 이번 달 기준 실제 유효 항목만 집계
+            const activeTpls=fixedTemplates.filter(f=>f.memberId===m.id&&f.startYm&&f.startYm<=nowYm&&(!f.endYm||f.endYm>=nowYm));
+            const total=activeTpls.reduce((s,f)=>s+(Number(f.amount)||0),0);
+            const byAcc={};
+            activeTpls.forEach(f=>{
+              const accId=f.allocAccountId||f.payAccountId||"";
+              byAcc[accId]=(byAcc[accId]||0)+(Number(f.amount)||0);
+            });
+            const accRows=Object.entries(byAcc).map(([accId,amt])=>{
+              const a=accId?accounts.find(x=>x.id===accId):null;
+              const label=accId?(a?`${a.bank}${a.note?` (${a.note})`:""}`:"삭제된 계좌"):"계좌 미지정";
+              return {label,amt};
+            }).sort((a,b)=>b.amt-a.amt);
+            return(<div key={m.id} style={{flex:1,minWidth:160,background:BG.card,border:`1px solid ${INK.border}`,borderLeft:`4px solid ${m.color}`,borderRadius:10,padding:"10px 12px"}}>
               <div style={{fontSize:11.5,color:INK.muted,fontWeight:600,marginBottom:2}}>{m.name} 고정지출 합계(이번 달 기준)</div>
-              <div style={{fontSize:17,fontWeight:800,color:INK.primary,fontVariantNumeric:"tabular-nums"}}>{fmtWon(total)}</div>
+              <div style={{fontSize:17,fontWeight:800,color:INK.primary,fontVariantNumeric:"tabular-nums",marginBottom:accRows.length?6:0}}>{fmtWon(total)}</div>
+              {accRows.length>0&&<div style={{borderTop:`1px solid ${INK.border}`,paddingTop:6,display:"flex",flexDirection:"column",gap:2}}>
+                {accRows.map(r=>(<div key={r.label} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11,color:INK.secondary}}>
+                  <span>{r.label}</span><span style={{fontVariantNumeric:"tabular-nums"}}>{fmtNum(r.amt)}</span>
+                </div>))}
+              </div>}
             </div>);
           })}
         </div>
