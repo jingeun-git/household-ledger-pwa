@@ -1158,9 +1158,13 @@ function App(){
       try{
         const d=await cloudGetAll();
         const load=(key,setter,def)=>{
+          // 여기서 쓰는 setter는 항상 raw 상태 setter(setTxRaw 등)이지 makeSetter가 감싼
+          // 저장용 setter가 아니다 — skipSaveRef를 확인하는 코드는 makeSetter 안에만 있으므로,
+          // 여기서 skipSaveRef에 넣어봤자 이 로드 자체를 보호하지 못한다. 대신 그 이후 사용자가
+          // 처음 입력하는 진짜 거래 1건이 makeSetter의 skipSaveRef 체크에 걸려 저장이 조용히
+          // 건너뛰어지는 버그가 있었다(2026-07-22, "새로고침 직후 입력한 내역이 사라짐"으로 발견).
           if(d[key]&&d[key].value){ try{ setter(JSON.parse(d[key].value)); }catch(e){ setter(def); } }
           lastSyncRef.current[key]=d[key]?.updatedAt||null;
-          skipSaveRef.current.add(key);
         };
         load("ledger_members",setMembersRaw,DEF_MEMBERS);
         load("ledger_accounts",setAccountsRaw,[]);
