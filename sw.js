@@ -1,7 +1,7 @@
 // ⚠ index.html을 캐시 우선으로 서빙하므로, index.html을 고쳤으면 이 버전을 반드시 올린다.
 // 서비스워커는 sw.js 바이트가 바뀔 때만 재설치되어 install의 addAll이 새 셸을 받아온다.
 // 버전을 안 올리면 사용자는 새로고침해도 옛 화면을 계속 본다.
-const CACHE = 'household-ledger-shell-v3'; // v3: 새로고침 직후 입력한 거래가 저장 안 되는 버그 수정(skipSaveRef)
+const CACHE = 'household-ledger-shell-v4'; // v4: 할부(2~24개월) 기능 추가
 const SHELL = ['index.html', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

@@ -78,6 +78,8 @@ const nowIso=()=>new Date().toISOString();
 const currentYm=()=>new Date().toISOString().slice(0,7);
 const ymLabel=ym=>{const[y,m]=ym.split("-");return `${y}년 ${Number(m)}월`;};
 const addYm=(ym,n)=>{const[y,m]=ym.split("-").map(Number);const d=new Date(y,m-1+n,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;};
+// 할부 회차별 날짜 계산 — 같은 '일(day)'로 n개월 뒤, 대상 월에 그 일자가 없으면(예: 31일) 말일로 보정
+const addMonthsToDate=(dateStr,n)=>{const[y,m,d]=dateStr.split("-").map(Number);const lastDay=new Date(y,m-1+n+1,0).getDate();return fmtDate(new Date(y,m-1+n,Math.min(d,lastDay)));};
 const fmtWon=n=>(Number(n)||0).toLocaleString("ko-KR")+"원";
 const fmtNum=n=>(Number(n)||0).toLocaleString("ko-KR");
 const todayStr=()=>new Date().toISOString().slice(0,10);
@@ -605,6 +607,7 @@ function TxView({data,ym,setYm}){
   const {tx,setTx,members,categories,accounts}=data;
   const [form,setForm]=useState(emptyTxForm());
   const [editId,setEditId]=useState(null);
+  const [installments,setInstallments]=useState(1); // 1=일시불, 2~24=할부 개월수 — 지출 신규 입력에서만 사용
   const [fMember,setFMember]=useState("전체");
   const [fCat,setFCat]=useState("전체");
   const [fType,setFType]=useState("전체");
@@ -624,15 +627,32 @@ function TxView({data,ym,setYm}){
   const submit=()=>{
     // 0원·음수도 유효한 등록이다(환불·정정) — 미입력·부호만 입력한 상태만 반려한다
     if(!form.memberId||!form.desc.trim()||!isAmountFilled(form.amount)) return;
+    // 할부(2~24개월) — 지출 신규 입력에서만 적용. 기존 내역은 전혀 건드리지 않고 새 회차 N건만 추가한다.
+    // 우수리(나눠떨어지지 않는 금액)는 1회차에 몰아서 반영, 날짜는 매달 같은 '일'로(말일 초과 시 그 달 말일로 보정).
+    if(!editId&&form.type==="expense"&&installments>=2){
+      const total=Number(form.amount);
+      const base=Math.floor(total/installments);
+      const remainder=total-base*installments;
+      const newRecs=Array.from({length:installments},(_,i)=>{
+        const date=addMonthsToDate(form.date,i);
+        const badge=`[할부 ${i+1}/${installments}]`;
+        const memo=form.memo.trim()?`${form.memo.trim()}, ${badge}`:badge;
+        return {...form,date,ym:date.slice(0,7),amount:i===0?base+remainder:base,
+          kind:"variable",memo,id:"tx_"+uid(),createdAt:nowIso()};
+      });
+      setTx([...tx,...newRecs]);
+      setForm(emptyTxForm()); setEditId(null); setInstallments(1);
+      return;
+    }
     const rec={...form,ym:form.date.slice(0,7),amount:Number(form.amount),
       categoryId:form.type==="income"?"":form.categoryId,
       kind:form.type==="income"?undefined:(form.kind||"variable"), // 수정 시 기존 kind(변동/고정) 보존 — 신규 입력만 변동으로 기본값
       id:editId||("tx_"+uid()),createdAt:editId?tx.find(t=>t.id===editId)?.createdAt:nowIso()};
     if(editId){ setTx(tx.map(t=>t.id===editId?rec:t)); } else { setTx([...tx,rec]); }
-    setForm(emptyTxForm()); setEditId(null);
+    setForm(emptyTxForm()); setEditId(null); setInstallments(1);
   };
-  const cancelEdit=()=>{setForm(emptyTxForm());setEditId(null);};
-  const startEdit=t=>{setForm({...t});setEditId(t.id);};
+  const cancelEdit=()=>{setForm(emptyTxForm());setEditId(null);setInstallments(1);};
+  const startEdit=t=>{setForm({...t});setEditId(t.id);setInstallments(1);};
   const del=id=>{if(!confirm("삭제하시겠습니까?"))return;setTx(tx.filter(t=>t.id!==id));if(editId===id){cancelEdit();}};
 
   return(<div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"18px 20px"}}>
@@ -666,6 +686,12 @@ function TxView({data,ym,setYm}){
           <Field label="금액">
             <MoneyInput value={form.amount} onChange={v=>setForm({...form,amount:v})} allowNegative/>
           </Field>
+          {form.type==="expense"&&!editId&&<Field label="할부">
+            <select style={inputSt} value={installments} onChange={e=>setInstallments(Number(e.target.value))}>
+              <option value={1}>일시불</option>
+              {Array.from({length:23},(_,i)=>i+2).map(n=><option key={n} value={n}>{n}개월</option>)}
+            </select>
+          </Field>}
           <Field label="방법">
             <select style={inputSt} value={form.payAccountId} onChange={e=>setForm({...form,payAccountId:e.target.value})}>
               <option value="">결제계좌(선택)</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank} {a.note}</option>)}
